@@ -360,6 +360,27 @@ test('structured run output preserves all 20 public focus items', () => {
   assert.deepEqual(result.focus.map((item) => item.symbol), focus.map((item) => item.symbol))
 })
 
+test('sanitized tool outputs omit undefined optional fields', () => {
+  const run = sanitizeResearchRunResult(canonicalRun({
+    focus: [{ symbol: 'DEMOA', name: 'Synthetic Alpha' }],
+  }))
+  assert.equal(Object.hasOwn(run, 'reused'), false)
+  assert.equal(Object.hasOwn(run.focus[0], 'theme'), false)
+  assert.equal(Object.hasOwn(run.focus[0], 'decision'), false)
+  assert.equal(Object.hasOwn(run.focus[0], 'reason'), false)
+
+  const artifact = sanitizeArtifactReadResult({
+    schema_version: '0.1',
+    market: 'US',
+    artifact_id: 'us-artifact-demo',
+    section: 'summary',
+    content_type: 'application/json',
+    content: '{"ok":true}',
+    truncated: false,
+  })
+  assert.equal(Object.hasOwn(artifact, 'relative_path'), false)
+})
+
 test('artifact bridge keeps domain errors structured and rejects infrastructure errors', async () => {
   const { projectRoot } = await makeTempProject()
   await writeFakePython(projectRoot)

@@ -93,35 +93,37 @@ for tool in ssh rsync; do
   fi
 done
 
-backup_path="$(ssh -o BatchMode=yes "$remote_host" "bash -lc '
-  set -euo pipefail
-  target=\"$remote_project\"
-  backup_dir=\"$remote_root/.deploy-backups\"
-  mkdir -p \"$remote_root\" \"$target\"
-  if [[ -n \$(find \"$target\" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
-    stamp=\$(date -u +%Y%m%dT%H%M%SZ)
-    backup_file=\"$backup_dir/us_equity_research-\$stamp.tar.gz\"
-    mkdir -p \"$backup_dir\"
-    tar -czf \"\$backup_file\" \
-      --exclude=.venv \
-      --exclude=.pytest_cache \
-      --exclude=.ruff_cache \
-      --exclude=node_modules \
-      --exclude=build \
-      --exclude=data \
-      --exclude=materials \
-      --exclude=artifacts \
-      --exclude=reports \
-      --exclude=prompts \
-      --exclude=templates \
-      --exclude=credentials \
-      --exclude=history \
-      --exclude=journal \
-      --exclude=research \
-      -C \"$target\" .
-    printf %s \"\$backup_file\"
-  fi
-'")"
+backup_path="$(ssh -o BatchMode=yes "$remote_host" 'bash -s' -- "$remote_project" "$remote_root" <<'EOF'
+set -euo pipefail
+target="$1"
+remote_root="$2"
+backup_dir="$remote_root/.deploy-backups"
+mkdir -p "$remote_root" "$target"
+if [[ -n "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  backup_file="$backup_dir/us_equity_research-$stamp.tar.gz"
+  mkdir -p "$backup_dir"
+  tar -czf "$backup_file" \
+    --exclude=.venv \
+    --exclude=.pytest_cache \
+    --exclude=.ruff_cache \
+    --exclude=node_modules \
+    --exclude=build \
+    --exclude=data \
+    --exclude=materials \
+    --exclude=artifacts \
+    --exclude=reports \
+    --exclude=prompts \
+    --exclude=templates \
+    --exclude=credentials \
+    --exclude=history \
+    --exclude=journal \
+    --exclude=research \
+    -C "$target" .
+  printf '%s' "$backup_file"
+fi
+EOF
+)"
 
 rsync_excludes=(
   --exclude '.venv/'

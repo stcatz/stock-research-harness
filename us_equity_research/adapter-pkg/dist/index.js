@@ -352,14 +352,24 @@ function sanitizeFocus(value) {
         if (!symbol || !name || !US_SYMBOL.test(symbol)) {
             return [];
         }
+        const focusItem = {
+            symbol,
+            name
+        };
+        const theme = boundedOptionalText(raw.theme, `focus[${index}].theme`, 160);
+        if (theme !== undefined) {
+            focusItem.theme = theme;
+        }
+        const decision = boundedOptionalText(raw.decision, `focus[${index}].decision`, 40);
+        if (decision !== undefined) {
+            focusItem.decision = decision;
+        }
+        const reason = boundedOptionalText(raw.reason, `focus[${index}].reason`, 500);
+        if (reason !== undefined) {
+            focusItem.reason = reason;
+        }
         return [
-            {
-                symbol,
-                name,
-                theme: boundedOptionalText(raw.theme, `focus[${index}].theme`, 160),
-                decision: boundedOptionalText(raw.decision, `focus[${index}].decision`, 40),
-                reason: boundedOptionalText(raw.reason, `focus[${index}].reason`, 500)
-            }
+            focusItem
         ];
     });
 }
@@ -565,7 +575,7 @@ export function sanitizeResearchRunResult(raw) {
     if (!WORKFLOWS.has(workflow)) {
         throw new Error('CLI run result returned an unsupported workflow');
     }
-    return {
+    const result = {
         schema_version: SCHEMA_VERSION,
         market: MARKET,
         run_id: validateIdentifier(payload.run_id, 'run_id'),
@@ -583,9 +593,13 @@ export function sanitizeResearchRunResult(raw) {
         warnings: sanitizeStringArray(payload.warnings, 'warnings'),
         gaps: sanitizeStringArray(payload.gaps, 'gaps'),
         available_sections: sanitizeSections(payload.available_sections),
-        manifest_hash: boundedVisibleText(payload.manifest_hash, 'manifest_hash', 128),
-        reused: getBoolean(payload.reused, 'reused')
+        manifest_hash: boundedVisibleText(payload.manifest_hash, 'manifest_hash', 128)
     };
+    const reused = getBoolean(payload.reused, 'reused');
+    if (reused !== undefined) {
+        result.reused = reused;
+    }
+    return result;
 }
 export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     const payload = ensurePlainObject(raw, 'artifact result');
@@ -605,16 +619,20 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     const marker = '\n…[truncated]';
     const wasCapped = sanitizedContent.length > normalizedMaxChars;
     const content = wasCapped ? `${sanitizedContent.slice(0, Math.max(0, normalizedMaxChars - marker.length))}${marker}` : sanitizedContent;
-    return {
+    const result = {
         schema_version: SCHEMA_VERSION,
         market: MARKET,
         artifact_id: validateIdentifier(payload.artifact_id, 'artifact_id'),
         section,
         content_type: boundedVisibleText(payload.content_type, 'content_type', 80),
         content,
-        truncated: Boolean(getBoolean(payload.truncated, 'truncated') || wasCapped),
-        relative_path: sanitizeRelativePath(payload.relative_path)
+        truncated: Boolean(getBoolean(payload.truncated, 'truncated') || wasCapped)
     };
+    const relativePath = sanitizeRelativePath(payload.relative_path);
+    if (relativePath !== undefined) {
+        result.relative_path = relativePath;
+    }
+    return result;
 }
 function boundRendered(value) {
     if (value.length <= MAX_RENDER_CHARS) {
