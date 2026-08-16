@@ -3,7 +3,51 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 <user@host> </Users/name/ai/stock>" >&2
+  echo "       $0 --self-test" >&2
 }
+
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+local_root="$(cd -- "$script_directory/.." && pwd)"
+project_name="us_equity_research"
+local_project="$local_root/$project_name"
+readonly HOST_PATTERN='^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$'
+readonly ROOT_PATTERN='^/Users/[A-Za-z0-9._-]+/ai/stock$'
+
+validate_remote_host() {
+  local value="$1"
+  if [[ ! "$value" =~ $HOST_PATTERN ]]; then
+    echo "Remote host must be explicit user@host using only [A-Za-z0-9._-] for the user and [A-Za-z0-9.-] for the host: $value" >&2
+    return 1
+  fi
+}
+
+validate_remote_root() {
+  local value="$1"
+  if [[ ! "$value" =~ $ROOT_PATTERN ]]; then
+    echo "Remote root must be an explicit /Users/<name>/ai/stock path: $value" >&2
+    return 1
+  fi
+}
+
+self_test() {
+  validate_remote_host "deployer@example-host.local"
+  validate_remote_host "qa.user@mac-mini-01"
+  validate_remote_root "/Users/deployer/ai/stock"
+  validate_remote_root "/Users/qa.user/ai/stock"
+
+  ! validate_remote_host "example-host.local" >/dev/null 2>&1
+  ! validate_remote_host "bad user@example-host.local" >/dev/null 2>&1
+  ! validate_remote_host "deploy@host:22" >/dev/null 2>&1
+  ! validate_remote_root "/tmp/stock" >/dev/null 2>&1
+  ! validate_remote_root "/Users//ai/stock" >/dev/null 2>&1
+
+  echo "deploy_us_remote.sh self-test passed"
+}
+
+if [[ $# -eq 1 && "${1:-}" == "--self-test" ]]; then
+  self_test
+  exit 0
+fi
 
 if [[ $# -ne 2 ]]; then
   usage
@@ -12,21 +56,10 @@ fi
 
 remote_host="$1"
 remote_root="$2"
-script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-local_root="$(cd -- "$script_directory/.." && pwd)"
-project_name="us_equity_research"
-local_project="$local_root/$project_name"
 remote_project="$remote_root/$project_name"
 
-if [[ ! "$remote_host" =~ ^([A-Za-z0-9._-]+@)?[A-Za-z0-9.:-]+$ ]]; then
-  echo "Unsafe remote host syntax: $remote_host" >&2
-  exit 1
-fi
-
-if [[ ! "$remote_root" =~ ^/Users/[A-Za-z0-9._-]+/ai/stock$ ]]; then
-  echo "Remote root must be an explicit /Users/<name>/ai/stock path: $remote_root" >&2
-  exit 1
-fi
+validate_remote_host "$remote_host"
+validate_remote_root "$remote_root"
 
 if [[ ! -d "$local_project" ]]; then
   echo "US project not found: $local_project" >&2
@@ -121,4 +154,5 @@ if [[ -n "$backup_path" ]]; then
   echo "Previous remote code backup: $backup_path"
 fi
 echo "DSH profiles were not modified."
+echo "Local validation: bash scripts/deploy_us_remote.sh --self-test"
 echo "Manual next step if desired: ssh -o BatchMode=yes '$remote_host' \"dsh plugin --profile web add '$remote_project/adapter-pkg'\""
