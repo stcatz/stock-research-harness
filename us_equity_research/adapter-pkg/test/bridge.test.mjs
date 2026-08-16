@@ -144,6 +144,12 @@ function canonicalRun(overrides = {}) {
   }
 }
 
+function assertLosslessJson(value) {
+  const encoded = JSON.stringify(value)
+  assert.notEqual(encoded, undefined)
+  assert.deepEqual(JSON.parse(encoded), value)
+}
+
 async function waitFor(check, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -358,6 +364,31 @@ test('structured run output preserves all 20 public focus items', () => {
   assert.equal('error' in result, false)
   assert.equal(result.focus.length, 20)
   assert.deepEqual(result.focus.map((item) => item.symbol), focus.map((item) => item.symbol))
+})
+
+test('successful run and artifact outputs stay lossless JSON when optional fields are absent', () => {
+  const run = sanitizeResearchRunResult(canonicalRun({
+    focus: [{ symbol: 'DEMOA', name: 'Synthetic Alpha' }],
+  }))
+  const artifact = sanitizeArtifactReadResult({
+    schema_version: '0.1',
+    market: 'US',
+    artifact_id: 'us-artifact-demo',
+    section: 'summary',
+    content_type: 'application/json',
+    content: '{"ok":true}',
+    truncated: false,
+    relative_path: '../unsafe/report.md',
+  })
+  assert.equal('error' in run, false)
+  assert.equal('error' in artifact, false)
+  assert.equal(Object.hasOwn(run.focus[0], 'theme'), false)
+  assert.equal(Object.hasOwn(run.focus[0], 'decision'), false)
+  assert.equal(Object.hasOwn(run.focus[0], 'reason'), false)
+  assert.equal(Object.hasOwn(run, 'reused'), false)
+  assert.equal(Object.hasOwn(artifact, 'relative_path'), false)
+  assertLosslessJson(run)
+  assertLosslessJson(artifact)
 })
 
 test('sanitized tool outputs omit undefined optional fields', () => {
