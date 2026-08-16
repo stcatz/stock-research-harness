@@ -10,7 +10,7 @@ script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 local_root="$(cd -- "$script_directory/.." && pwd)"
 project_name="us_equity_research"
 local_project="$local_root/$project_name"
-readonly HOST_PATTERN='^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$'
+readonly HOST_PATTERN='^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$'
 readonly ROOT_PATTERN='^/Users/[A-Za-z0-9._-]+/ai/stock$'
 
 validate_remote_host() {
@@ -35,6 +35,8 @@ self_test() {
   validate_remote_root "/Users/deployer/ai/stock"
   validate_remote_root "/Users/qa.user/ai/stock"
 
+  ! validate_remote_host "-Ftmp@dummyhost" >/dev/null 2>&1
+  ! validate_remote_host "deploy@-dummyhost" >/dev/null 2>&1
   ! validate_remote_host "example-host.local" >/dev/null 2>&1
   ! validate_remote_host "bad user@example-host.local" >/dev/null 2>&1
   ! validate_remote_host "deploy@host:22" >/dev/null 2>&1

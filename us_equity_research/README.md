@@ -164,7 +164,7 @@ It is a thin client for headless and Web profiles. It forwards versioned request
 For a local syntax and argument-contract check before touching a remote host:
 
 ```bash
-bash scripts/deploy_us_remote.sh --self-test
+bash ../scripts/deploy_us_remote.sh --self-test
 ```
 
 For remote use, prefer an SSH tunnel to a loopback-bound Web profile rather than a public listener. Example flow:

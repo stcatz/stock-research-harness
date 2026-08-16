@@ -74,7 +74,7 @@ Candidates need official primary evidence, structured market support, a transmis
 
 The engine writes:
 
-- `packet.json`
+- `research_packet.json`
 - `report.md`
 - `manifest.json`
 
