@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import copy
 import json
+import tempfile
 import unittest
+from importlib.resources import files
 from pathlib import Path
 
 from us_equity_research.core.contracts import ArtifactReadRequest, ContractError, RunRequest
+from us_equity_research.core.snapshot import load_snapshot, validate_snapshot
 
 
 class RunRequestTests(unittest.TestCase):
@@ -191,6 +195,216 @@ class ArtifactReadRequestTests(unittest.TestCase):
             schema["properties"]["artifact_id"]["pattern"],
             "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
         )
+
+
+class SnapshotContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        resource = files("us_equity_research.fixtures").joinpath("demo_snapshot.json")
+        with resource.open("r", encoding="utf-8") as handle:
+            cls.demo = json.load(handle)
+
+    def test_demo_snapshot_is_valid_and_explicitly_fixture(self) -> None:
+        snapshot = validate_snapshot(self.demo)
+        self.assertEqual(snapshot.data_mode, "fixture")
+        self.assertEqual(snapshot.pit_quality, "FIXTURE")
+        self.assertEqual(snapshot.data["market"], "US")
+        self.assertIn("EV-FUTURE-001", snapshot.evidence_by_id)
+
+    def test_snapshot_schema_matches_us_contract(self) -> None:
+        schema = json.loads(
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            .joinpath("schemas", "snapshot.schema.json")
+            .read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")
+        self.assertEqual(schema["properties"]["market"]["const"], "US")
+        self.assertEqual(
+            schema["properties"]["pit_quality"]["enum"],
+            ["P1", "P2", "P3", "RECONSTRUCTED_NON_PIT", "FIXTURE"],
+        )
+        self.assertEqual(
+            schema["properties"]["financial_facts"]["items"]["properties"]["metric"]["enum"],
+            [
+                "revenue_ttm",
+                "operating_income_ttm",
+                "free_cash_flow_ttm",
+                "cash_and_equivalents",
+                "total_debt",
+                "diluted_shares",
+                "close_price",
+            ],
+        )
+
+    def test_fixture_and_snapshot_pit_quality_rules_are_enforced(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["pit_quality"] = "P1"
+        with self.assertRaisesRegex(
+            ContractError, "fixture snapshots must use pit_quality=FIXTURE"
+        ):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["data_mode"] = "snapshot"
+        with self.assertRaisesRegex(
+            ContractError, "non-fixture snapshots must not use pit_quality=FIXTURE"
+        ):
+            validate_snapshot(invalid)
+
+    def test_unknown_references_and_duplicate_ids_are_rejected(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["themes"][0]["candidates"][0]["financial_fact_refs"].append("FACT-NOT-FOUND")
+        with self.assertRaisesRegex(ContractError, "unknown financial fact"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"].append(copy.deepcopy(invalid["evidence"][0]))
+        with self.assertRaisesRegex(ContractError, "must contain unique values"):
+            validate_snapshot(invalid)
+
+    def test_evidence_timelines_and_required_fields_are_enforced(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][0]["available_at"] = "2026-08-15T16:10:00"
+        with self.assertRaisesRegex(ContractError, "timezone"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][0]["source_level"] = "blog"
+        with self.assertRaisesRegex(ContractError, "source_level must be one of"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][0]["available_at"] = "2026-08-14T15:00:00-04:00"
+        with self.assertRaisesRegex(
+            ContractError, "published_at must not be later than available_at"
+        ):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][1]["as_of"] = "2026-08-16T16:00:00-04:00"
+        with self.assertRaisesRegex(ContractError, "as_of must not be later than available_at"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][0]["retrieved_at"] = "2026-08-17T08:00:00-04:00"
+        with self.assertRaisesRegex(ContractError, "snapshot.retrieved_at"):
+            validate_snapshot(invalid)
+
+    def test_financial_facts_enforce_metric_source_and_numeric_rules(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["financial_facts"][0]["value"] = True
+        with self.assertRaisesRegex(ContractError, "must be a finite number"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["financial_facts"][0]["available_at"] = "2026-08-17T08:00:00-04:00"
+        with self.assertRaisesRegex(ContractError, "financial_facts\\[0\\]\\.available_at"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["financial_facts"][0]["evidence_ref"] = "EV-MARKET-001"
+        with self.assertRaisesRegex(ContractError, "must reference official evidence"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["financial_facts"][-1]["evidence_ref"] = "EV-SEC-001"
+        with self.assertRaisesRegex(ContractError, "close_price must reference structured_market"):
+            validate_snapshot(invalid)
+
+    def test_market_context_requires_rates_and_valid_evidence(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        del invalid["market_context"]["rates"]
+        with self.assertRaisesRegex(ContractError, "market_context.rates"):
+            validate_snapshot(invalid)
+
+        invalid = copy.deepcopy(self.demo)
+        invalid["market_context"]["evidence_refs"] = ["EV-NOT-FOUND"]
+        with self.assertRaisesRegex(ContractError, "unknown evidence"):
+            validate_snapshot(invalid)
+
+    def test_latest_snapshot_validates_each_candidate_and_orders_by_retrieved_at_then_id(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            base = workspace / "data" / "normalized" / "us"
+
+            invalid = copy.deepcopy(self.demo)
+            invalid["snapshot_id"] = "bad-latest"
+            invalid["data_mode"] = "snapshot"
+            invalid["pit_quality"] = "FIXTURE"
+            bad_path = base / "zz-bad" / "snapshot.json"
+            bad_path.parent.mkdir(parents=True)
+            bad_path.write_text(json.dumps(invalid), encoding="utf-8")
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "latest"},
+                }
+            )
+            with self.assertRaisesRegex(
+                ContractError, "non-fixture snapshots must not use pit_quality=FIXTURE"
+            ):
+                load_snapshot(workspace, request)
+            bad_path.unlink()
+
+            invalid = copy.deepcopy(self.demo)
+            invalid["snapshot_id"] = "aa-same-time"
+            invalid["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][0]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][1]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][2]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][3]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][4]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][5]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][6]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][7]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            invalid["evidence"][8]["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+
+            winner = copy.deepcopy(self.demo)
+            winner["snapshot_id"] = "zz-same-time"
+            winner["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+            for evidence in winner["evidence"]:
+                evidence["retrieved_at"] = "2026-08-16T10:05:00-04:00"
+
+            for directory, snapshot in (("b-mid", invalid), ("a-top", winner)):
+                path = base / directory / "snapshot.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+            self.assertEqual(load_snapshot(workspace, request).snapshot_id, "zz-same-time")
+
+    def test_snapshot_id_lookup_uses_safe_us_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            snapshot_path = (
+                workspace
+                / "data"
+                / "normalized"
+                / "us"
+                / self.demo["snapshot_id"]
+                / "snapshot.json"
+            )
+            snapshot_path.parent.mkdir(parents=True)
+            snapshot_path.write_text(json.dumps(self.demo), encoding="utf-8")
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "id", "snapshot_id": self.demo["snapshot_id"]},
+                }
+            )
+            self.assertEqual(
+                load_snapshot(workspace, request).snapshot_id, self.demo["snapshot_id"]
+            )
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 SCHEMA_VERSION = "0.1"
 MARKET = "US"
@@ -12,6 +14,22 @@ SNAPSHOT_SELECTORS = ("demo", "latest", "id")
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.-]{0,14}$"
 ARTIFACT_ID_PATTERN = r"^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,128}$"
 ALLOWED_ARTIFACT_SECTIONS = ("summary", "report", "manifest", "packet")
+SOURCE_LEVELS = ("official", "structured_market", "industry", "secondary")
+STAGES = ("discovery", "confirming", "expanding", "crowded", "diverging", "fading")
+ASSESSMENTS = ("strong", "medium", "weak", "unknown")
+DIMENSIONS = ("materiality", "novelty", "breadth", "durability", "timeliness")
+FINANCIAL_METRICS = (
+    "revenue_ttm",
+    "operating_income_ttm",
+    "free_cash_flow_ttm",
+    "cash_and_equivalents",
+    "total_debt",
+    "diluted_shares",
+    "close_price",
+)
+PRIMARY_EVIDENCE_CATEGORIES = ("sec_filing", "issuer_ir", "official_macro", "regulatory")
+MARKET_EVIDENCE_CATEGORIES = ("market_price", "market_breadth", "rates")
+CANDIDATE_ROLES = ("leader", "platform", "beneficiary", "speculative")
 
 _SYMBOL_RE = re.compile(SYMBOL_PATTERN)
 _SAFE_ID_RE = re.compile(ARTIFACT_ID_PATTERN)
@@ -24,6 +42,12 @@ class ContractError(ValueError):
 def require_mapping(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractError(f"{field} must be an object")
+    return value
+
+
+def require_list(value: Any, field: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ContractError(f"{field} must be an array")
     return value
 
 
@@ -59,6 +83,14 @@ def parse_datetime(value: Any, field: str) -> datetime:
     return parsed
 
 
+def validate_url(value: Any, field: str) -> str:
+    raw = require_string(value, field, strip=False)
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ContractError(f"{field} must be an https URL")
+    return raw
+
+
 def validate_identifier(value: Any, field: str) -> str:
     raw = require_string(value, field, strip=False)
     if raw != raw.strip():
@@ -81,6 +113,19 @@ def _reject_unknown_fields(value: dict[str, Any], allowed: set[str], field: str)
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ContractError(f"{field} contains unsupported fields: {', '.join(unknown)}")
+
+
+def ensure_unique(values: Iterable[str], field: str) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        else:
+            seen.add(value)
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ContractError(f"{field} must contain unique values; duplicates: {duplicate_list}")
 
 
 def _validate_top_n(value: Any) -> int:

@@ -1,0 +1,356 @@
+{
+  "schema_version": "0.1",
+  "market": "US",
+  "snapshot_id": "us-demo-20260816",
+  "data_mode": "fixture",
+  "pit_quality": "FIXTURE",
+  "as_of": "2026-08-15T16:00:00-04:00",
+  "retrieved_at": "2026-08-16T10:30:00-04:00",
+  "fixture_notice": "All issuers, symbols, URLs, events, facts, and conclusions in this fixture are synthetic test data only; they do not represent real issuers, real market facts, or investment recommendations.",
+  "market_context": {
+    "regime": "Synthetic risk-on tape with selective follow-through in automation infrastructure.",
+    "breadth": "Synthetic breadth improved as two of three tracked demo cohorts advanced on rising volume.",
+    "rates": "Synthetic front-end yields eased while long-end yields stayed range-bound.",
+    "liquidity": "Synthetic liquidity remained sufficient for follow-on participation but not broad speculation.",
+    "calculation_note": "Derived from deterministic fixture inputs only; replace with production venue and macro snapshots before research use.",
+    "evidence_refs": ["EV-MARKET-001", "EV-BREADTH-001", "EV-RATES-001"]
+  },
+  "evidence": [
+    {
+      "evidence_id": "EV-MARKET-001",
+      "source_level": "structured_market",
+      "category": "market_price",
+      "title": "DEMOA synthetic closing tape and relative strength",
+      "summary": "Synthetic venue-normalized close and turnover data show DEMOA outperforming other fixture names on the snapshot date.",
+      "source_url": "https://market.example.invalid/us/demoa/close-20260815",
+      "source_document_id": "doc-market-demoa-20260815",
+      "published_at": "2026-08-15T16:05:00-04:00",
+      "effective_at": "2026-08-15T16:00:00-04:00",
+      "available_at": "2026-08-15T16:05:00-04:00",
+      "retrieved_at": "2026-08-16T07:50:00-04:00",
+      "as_of": "2026-08-15T16:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-BREADTH-001",
+      "source_level": "structured_market",
+      "category": "market_breadth",
+      "title": "Synthetic automation cohort breadth snapshot",
+      "summary": "Synthetic breadth data show the automation fixture basket widened from one advancing name to two.",
+      "source_url": "https://market.example.invalid/us/automation/breadth-20260815",
+      "source_document_id": "doc-breadth-automation-20260815",
+      "published_at": "2026-08-15T16:07:00-04:00",
+      "effective_at": "2026-08-15T16:00:00-04:00",
+      "available_at": "2026-08-15T16:07:00-04:00",
+      "retrieved_at": "2026-08-16T07:51:00-04:00",
+      "as_of": "2026-08-15T16:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-RATES-001",
+      "source_level": "structured_market",
+      "category": "rates",
+      "title": "Synthetic Treasury curve checkpoint",
+      "summary": "Synthetic rates data show stable long-end funding conditions relative to the prior fixture session.",
+      "source_url": "https://market.example.invalid/us/rates/curve-20260815",
+      "source_document_id": "doc-rates-curve-20260815",
+      "published_at": "2026-08-15T16:10:00-04:00",
+      "effective_at": "2026-08-15T16:00:00-04:00",
+      "available_at": "2026-08-15T16:10:00-04:00",
+      "retrieved_at": "2026-08-16T07:52:00-04:00",
+      "as_of": "2026-08-15T16:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-SEC-001",
+      "source_level": "official",
+      "category": "sec_filing",
+      "title": "DEMOA synthetic annual filing",
+      "summary": "Synthetic filing states DEMOA expanded revenue and maintained positive free cash flow over the trailing twelve months.",
+      "source_url": "https://sec.example.invalid/us/demoa/10k-20260814",
+      "source_document_id": "doc-sec-demoa-10k-20260814",
+      "published_at": "2026-08-14T17:30:00-04:00",
+      "effective_at": "2026-08-14T17:30:00-04:00",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "retrieved_at": "2026-08-16T07:40:00-04:00",
+      "as_of": "2026-08-14T17:30:00-04:00"
+    },
+    {
+      "evidence_id": "EV-IR-001",
+      "source_level": "official",
+      "category": "issuer_ir",
+      "title": "DEMOA synthetic investor presentation",
+      "summary": "Synthetic issuer IR materials attribute margin expansion to recurring software attach and service utilization.",
+      "source_url": "https://ir.example.invalid/us/demoa/presentation-q2",
+      "source_document_id": "doc-ir-demoa-q2-20260815",
+      "published_at": "2026-08-15T08:00:00-04:00",
+      "effective_at": "2026-08-15T08:00:00-04:00",
+      "available_at": "2026-08-15T08:00:00-04:00",
+      "retrieved_at": "2026-08-16T07:41:00-04:00",
+      "as_of": "2026-08-15T08:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-MACRO-001",
+      "source_level": "official",
+      "category": "official_macro",
+      "title": "Synthetic public-sector automation budget update",
+      "summary": "Synthetic macro release indicates incremental budget capacity for automation pilots in the next procurement cycle.",
+      "source_url": "https://macro.example.invalid/us/automation-budget-20260815",
+      "source_document_id": "doc-macro-automation-20260815",
+      "published_at": "2026-08-15T09:00:00-04:00",
+      "effective_at": "2026-08-15T09:00:00-04:00",
+      "available_at": "2026-08-15T09:00:00-04:00",
+      "retrieved_at": "2026-08-16T07:42:00-04:00",
+      "as_of": "2026-08-15T09:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-INDUSTRY-001",
+      "source_level": "industry",
+      "category": "supply_chain",
+      "title": "Synthetic integrator backlog survey",
+      "summary": "Synthetic survey suggests system integrators are prioritizing platform suppliers over one-off component vendors.",
+      "source_url": "https://industry.example.invalid/us/integrator-backlog-20260815",
+      "source_document_id": "doc-industry-backlog-20260815",
+      "published_at": "2026-08-15T11:00:00-04:00",
+      "effective_at": "2026-08-15T11:00:00-04:00",
+      "available_at": "2026-08-15T11:00:00-04:00",
+      "retrieved_at": "2026-08-16T07:43:00-04:00",
+      "as_of": "2026-08-15T11:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-SECONDARY-001",
+      "source_level": "secondary",
+      "category": "attention",
+      "title": "Synthetic newsletter attention tracker",
+      "summary": "Synthetic secondary commentary shows rising attention around automation platforms but lacks issuer-level proof on its own.",
+      "source_url": "https://secondary.example.invalid/us/automation-attention-20260815",
+      "source_document_id": "doc-secondary-attention-20260815",
+      "published_at": "2026-08-15T13:00:00-04:00",
+      "effective_at": "2026-08-15T13:00:00-04:00",
+      "available_at": "2026-08-15T13:00:00-04:00",
+      "retrieved_at": "2026-08-16T07:44:00-04:00",
+      "as_of": "2026-08-15T13:00:00-04:00"
+    },
+    {
+      "evidence_id": "EV-FUTURE-001",
+      "source_level": "official",
+      "category": "regulatory",
+      "title": "Synthetic post-cutoff procurement shortlist notice",
+      "summary": "This synthetic notice becomes available after the default demo decision time and exists only to test time-leak handling.",
+      "source_url": "https://regulator.example.invalid/us/post-cutoff-shortlist-20260816",
+      "source_document_id": "doc-regulatory-shortlist-20260816",
+      "published_at": "2026-08-16T10:00:00-04:00",
+      "effective_at": "2026-08-20T09:00:00-04:00",
+      "available_at": "2026-08-16T10:00:00-04:00",
+      "retrieved_at": "2026-08-16T10:01:00-04:00",
+      "as_of": "2026-08-16T10:00:00-04:00"
+    }
+  ],
+  "financial_facts": [
+    {
+      "fact_id": "FACT-DEMOA-REV-TTM",
+      "security_id": "US.DEMOA",
+      "metric": "revenue_ttm",
+      "value": 240000000.0,
+      "unit": "USD",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-OPINC-TTM",
+      "security_id": "US.DEMOA",
+      "metric": "operating_income_ttm",
+      "value": 42000000.0,
+      "unit": "USD",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-FCF-TTM",
+      "security_id": "US.DEMOA",
+      "metric": "free_cash_flow_ttm",
+      "value": 30000000.0,
+      "unit": "USD",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-CASH",
+      "security_id": "US.DEMOA",
+      "metric": "cash_and_equivalents",
+      "value": 90000000.0,
+      "unit": "USD",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-DEBT",
+      "security_id": "US.DEMOA",
+      "metric": "total_debt",
+      "value": 25000000.0,
+      "unit": "USD",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-SHARES",
+      "security_id": "US.DEMOA",
+      "metric": "diluted_shares",
+      "value": 12000000.0,
+      "unit": "shares",
+      "period_end": "2026-06-30",
+      "available_at": "2026-08-14T17:30:00-04:00",
+      "evidence_ref": "EV-SEC-001"
+    },
+    {
+      "fact_id": "FACT-DEMOA-CLOSE",
+      "security_id": "US.DEMOA",
+      "metric": "close_price",
+      "value": 18.5,
+      "unit": "USD/share",
+      "period_end": "2026-08-15",
+      "available_at": "2026-08-15T16:05:00-04:00",
+      "evidence_ref": "EV-MARKET-001"
+    }
+  ],
+  "themes": [
+    {
+      "theme_id": "theme-us-automation-platforms",
+      "name": "Synthetic automation platform upgrade cycle",
+      "event_type": "budget_expansion",
+      "stage": "confirming",
+      "dimensions": {
+        "materiality": {
+          "assessment": "strong",
+          "reason": "Synthetic filings and macro inputs imply enough demand to matter for platform revenue and margins.",
+          "evidence_refs": ["EV-SEC-001", "EV-MACRO-001"]
+        },
+        "novelty": {
+          "assessment": "medium",
+          "reason": "The budget signal is new, but platform leadership was already partially recognized in prior synthetic commentary.",
+          "evidence_refs": ["EV-MACRO-001", "EV-SECONDARY-001"]
+        },
+        "breadth": {
+          "assessment": "medium",
+          "reason": "Synthetic breadth broadened beyond a single symbol, but gains remain concentrated in the platform layer.",
+          "evidence_refs": ["EV-BREADTH-001", "EV-INDUSTRY-001"]
+        },
+        "durability": {
+          "assessment": "medium",
+          "reason": "Procurement timing supports follow-through, but conversion still depends on real deployment cycles.",
+          "evidence_refs": ["EV-MACRO-001", "EV-INDUSTRY-001"]
+        },
+        "timeliness": {
+          "assessment": "strong",
+          "reason": "Core evidence predates the research cutoff; the future notice is explicitly segregated for later monitoring only.",
+          "evidence_refs": ["EV-SEC-001", "EV-MARKET-001"]
+        }
+      },
+      "transmission_chain": [
+        "Synthetic public budgets expand automation pilots.",
+        "Integrators prioritize reusable platform vendors over bespoke components.",
+        "Platform suppliers capture better attach rates and margin mix.",
+        "Improved cash generation and net cash capacity increase optionality."
+      ],
+      "next_catalyst_at": "2026-08-20T09:00:00-04:00",
+      "evidence_refs": ["EV-SEC-001", "EV-IR-001", "EV-MACRO-001", "EV-MARKET-001"],
+      "data_gaps": [
+        "Production snapshots still need real backlog, quote, and cohort breadth feeds.",
+        "Future regulatory confirmation must remain excluded before its availability time."
+      ],
+      "candidates": [
+        {
+          "security_id": "US.DEMOA",
+          "symbol": "DEMOA",
+          "name": "Demo Automation Platform A",
+          "role": "leader",
+          "thesis": "Synthetic official facts plus market confirmation support a high-quality continue candidate with enough raw inputs for valuation and cash-structure checks.",
+          "bull_case": {
+            "text": "Synthetic filings show revenue scale, operating leverage, positive free cash flow, and net cash, while market data confirm current sponsorship.",
+            "evidence_refs": ["EV-SEC-001", "EV-IR-001", "EV-MARKET-001"]
+          },
+          "bear_case": {
+            "text": "Even in the fixture, adoption could stall if procurement converts slower than expected and attention runs ahead of deployable demand.",
+            "evidence_refs": ["EV-MACRO-001", "EV-SECONDARY-001"]
+          },
+          "risk_verdict": {
+            "text": "Synthetic risk is acceptable for a continue outcome because the candidate has official financial coverage, market confirmation, and explicit invalidation checks.",
+            "evidence_refs": ["EV-SEC-001", "EV-MARKET-001", "EV-INDUSTRY-001"]
+          },
+          "evidence_refs": ["EV-SEC-001", "EV-IR-001", "EV-MACRO-001", "EV-INDUSTRY-001"],
+          "market_evidence_refs": ["EV-MARKET-001", "EV-BREADTH-001"],
+          "financial_fact_refs": [
+            "FACT-DEMOA-REV-TTM",
+            "FACT-DEMOA-OPINC-TTM",
+            "FACT-DEMOA-FCF-TTM",
+            "FACT-DEMOA-CASH",
+            "FACT-DEMOA-DEBT",
+            "FACT-DEMOA-SHARES",
+            "FACT-DEMOA-CLOSE"
+          ],
+          "invalidation_conditions": [
+            "Synthetic follow-up filings fail to sustain free cash flow or margin progression.",
+            "Synthetic market confirmation disappears while breadth narrows back to one name."
+          ],
+          "data_gaps": [],
+          "risk_flags": ["DEMO_ONLY"],
+          "manual_review_items": ["Re-check snapshot cutoff handling before using any future evidence in later runs."]
+        },
+        {
+          "security_id": "US.DEMOB",
+          "symbol": "DEMOB",
+          "name": "Demo Integrator B",
+          "role": "beneficiary",
+          "thesis": "Synthetic industry evidence suggests DEMOB could observe the theme, but it lacks the official fact base needed for a stronger stance.",
+          "bull_case": {
+            "text": "If platform demand broadens, integrators may see follow-on service pull-through.",
+            "evidence_refs": ["EV-INDUSTRY-001", "EV-MACRO-001"]
+          },
+          "bear_case": {
+            "text": "Without issuer-level official evidence, the synthetic benefit path remains indirect and should stay observational.",
+            "evidence_refs": ["EV-INDUSTRY-001", "EV-SECONDARY-001"]
+          },
+          "risk_verdict": {
+            "text": "Synthetic setup looks suitable for observe rather than continue because the financial and market evidence are incomplete.",
+            "evidence_refs": ["EV-INDUSTRY-001", "EV-SECONDARY-001"]
+          },
+          "evidence_refs": ["EV-INDUSTRY-001", "EV-MACRO-001", "EV-SECONDARY-001"],
+          "market_evidence_refs": ["EV-BREADTH-001"],
+          "financial_fact_refs": [],
+          "invalidation_conditions": ["No synthetic official disclosure emerges tying DEMOB to the budget cycle."],
+          "data_gaps": ["Missing synthetic issuer filing and point-in-time financial facts for DEMOB."],
+          "risk_flags": ["DEMO_ONLY", "OFFICIAL_EVIDENCE_MISSING"],
+          "manual_review_items": ["Require issuer-level official evidence before upgrading beyond observe."]
+        },
+        {
+          "security_id": "US.DEMOC",
+          "symbol": "DEMOC",
+          "name": "Demo Speculative C",
+          "role": "speculative",
+          "thesis": "Synthetic post-cutoff regulatory attention exists, but the timing leak and missing fundamentals make this an exclude candidate for production logic.",
+          "bull_case": {
+            "text": "If the future synthetic notice later becomes usable, DEMOC could enter the screening set.",
+            "evidence_refs": ["EV-FUTURE-001"]
+          },
+          "bear_case": {
+            "text": "At the default decision time there is no valid pre-cutoff official or financial support for DEMOC.",
+            "evidence_refs": ["EV-FUTURE-001", "EV-SECONDARY-001"]
+          },
+          "risk_verdict": {
+            "text": "Synthetic candidate should be excluded until time-valid official evidence and basic facts exist.",
+            "evidence_refs": ["EV-FUTURE-001"]
+          },
+          "evidence_refs": ["EV-FUTURE-001", "EV-SECONDARY-001"],
+          "market_evidence_refs": [],
+          "financial_fact_refs": [],
+          "invalidation_conditions": ["Future evidence remains after the research cutoff or never gains supporting fundamentals."],
+          "data_gaps": ["No usable pre-cutoff official evidence.", "No synthetic financial facts."],
+          "risk_flags": ["DEMO_ONLY", "TIME_LEAK_TEST", "NO_FACTS"],
+          "manual_review_items": ["Do not allow future-available evidence into point-in-time decisions."]
+        }
+      ]
+    }
+  ]
+}
