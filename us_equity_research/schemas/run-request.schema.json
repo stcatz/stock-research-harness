@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/us-equity-research/run-request.schema.json",
+  "title": "US equity research run request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "market", "workflow", "decision_at", "snapshot"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "US" },
+    "workflow": {
+      "enum": ["daily_report", "theme_research", "stock_research"]
+    },
+    "decision_at": { "type": "string", "format": "date-time" },
+    "subject": { "type": "string", "minLength": 1 },
+    "symbol": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,14}$",
+      "maxLength": 15
+    },
+    "top_n": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector"],
+      "properties": {
+        "selector": { "enum": ["demo", "latest", "id"] },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
+          "maxLength": 128
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "selector": { "const": "id" } } },
+          "then": { "required": ["snapshot_id"] },
+          "else": { "not": { "required": ["snapshot_id"] } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "workflow": { "const": "daily_report" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["subject"] },
+            { "required": ["symbol"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": { "properties": { "workflow": { "const": "theme_research" } } },
+      "then": {
+        "required": ["subject"],
+        "not": { "required": ["symbol"] }
+      }
+    },
+    {
+      "if": { "properties": { "workflow": { "const": "stock_research" } } },
+      "then": {
+        "required": ["symbol"],
+        "not": { "required": ["subject"] }
+      }
+    }
+  ]
+}

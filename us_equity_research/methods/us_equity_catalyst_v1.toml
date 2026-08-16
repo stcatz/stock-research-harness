@@ -1,0 +1,42 @@
+id = "us-equity-catalyst-v1"
+market = "US"
+purpose = "Financial-worker research prioritization only; never a trading signal."
+
+[dimensions]
+materiality = "Assess business relevance without converting it into an expected-return score."
+novelty = "Identify what is new relative to prior disclosed expectations."
+breadth = "Require multiple plausible beneficiaries or a clear company-specific transmission path."
+durability = "Require follow-up catalysts or persistence beyond a one-day narrative."
+timeliness = "Require evidence available before decision_at and relevant to the current research window."
+
+[source_policy]
+primary = ["sec_edgar", "issuer_ir", "official_macro"]
+structured_market = "byok_licensed_provider"
+fred_api_requires_separate_permission = true
+
+[time_rules]
+decision_at_timezone_aware = true
+available_at_cutoff_required = true
+time_leakage_must_be_preserved = true
+fixture_outputs_must_be_labeled = true
+
+[minimum_observe_gates]
+official_primary = true
+structured_market = true
+transmission_chain = true
+three_viewpoints = true
+invalidation_conditions = true
+future_catalyst = true
+calculations_complete = true
+issuer_specific_official = true
+no_time_leaks = true
+
+[allowed_decisions]
+values = ["exclude", "continue_research", "observe"]
+
+[prohibited]
+broker_connection = true
+automatic_order = true
+portfolio_weight = true
+target_price = true
+deterministic_price_prediction = true

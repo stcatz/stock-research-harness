@@ -24,6 +24,7 @@ us_equity_research/data/
 us_equity_research/materials/**
 us_equity_research/artifacts/**
 us_equity_research/reports/
+us_equity_research/build/
 !a_share_research/materials/.gitkeep
 !a_share_research/artifacts/.gitkeep
 !us_equity_research/materials/.gitkeep

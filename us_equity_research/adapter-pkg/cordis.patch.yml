@@ -1,0 +1,3 @@
+- insert:
+    - id: us-equity-research-tools
+      name: '@user/dsh-us-equity-research'

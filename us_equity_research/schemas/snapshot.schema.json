@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/us-equity-research/snapshot.schema.json",
+  "title": "US equity point-in-time research snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "market",
+    "snapshot_id",
+    "data_mode",
+    "pit_quality",
+    "as_of",
+    "retrieved_at",
+    "evidence",
+    "financial_facts",
+    "market_context",
+    "themes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "US" },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$"
+    },
+    "data_mode": { "enum": ["fixture", "snapshot"] },
+    "pit_quality": {
+      "enum": ["P1", "P2", "P3", "RECONSTRUCTED_NON_PIT", "FIXTURE"]
+    },
+    "as_of": { "type": "string", "format": "date-time" },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "fixture_notice": { "type": "string" },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" }
+    },
+    "financial_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fact_id",
+          "security_id",
+          "metric",
+          "value",
+          "unit",
+          "period_end",
+          "available_at",
+          "evidence_ref"
+        ],
+        "properties": {
+          "fact_id": { "$ref": "#/$defs/identifier" },
+          "security_id": { "$ref": "#/$defs/identifier" },
+          "metric": {
+            "enum": [
+              "revenue_ttm",
+              "operating_income_ttm",
+              "free_cash_flow_ttm",
+              "cash_and_equivalents",
+              "total_debt",
+              "diluted_shares",
+              "close_price"
+            ]
+          },
+          "value": { "type": "number" },
+          "unit": { "type": "string" },
+          "period_end": { "type": "string", "format": "date" },
+          "available_at": { "type": "string", "format": "date-time" },
+          "evidence_ref": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "market_context": { "$ref": "#/$defs/marketContext" },
+    "themes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/theme" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$"
+    },
+    "symbol": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9.-]{0,14}$"
+    },
+    "evidenceRefList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "source_level",
+        "category",
+        "title",
+        "summary",
+        "source_url",
+        "source_document_id",
+        "published_at",
+        "effective_at",
+        "available_at",
+        "retrieved_at",
+        "as_of"
+      ],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/identifier" },
+        "source_level": {
+          "enum": ["official", "structured_market", "industry", "secondary"]
+        },
+        "category": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "source_url": { "type": "string", "format": "uri" },
+        "source_document_id": { "$ref": "#/$defs/identifier" },
+        "published_at": { "type": "string", "format": "date-time" },
+        "effective_at": { "type": "string", "format": "date-time" },
+        "available_at": { "type": "string", "format": "date-time" },
+        "retrieved_at": { "type": "string", "format": "date-time" },
+        "as_of": { "type": "string", "format": "date-time" }
+      }
+    },
+    "financialFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "security_id",
+        "metric",
+        "value",
+        "unit",
+        "period_end",
+        "available_at",
+        "evidence_ref"
+      ],
+      "properties": {
+        "fact_id": { "$ref": "#/$defs/identifier" },
+        "security_id": { "$ref": "#/$defs/identifier" },
+        "metric": {
+          "enum": [
+            "revenue_ttm",
+            "operating_income_ttm",
+            "free_cash_flow_ttm",
+            "cash_and_equivalents",
+            "total_debt",
+            "diluted_shares",
+            "close_price"
+          ]
+        },
+        "value": { "type": "number" },
+        "unit": { "type": "string" },
+        "period_end": { "type": "string", "format": "date" },
+        "available_at": { "type": "string", "format": "date-time" },
+        "evidence_ref": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "marketContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "regime",
+        "breadth",
+        "rates",
+        "liquidity",
+        "calculation_note",
+        "evidence_refs"
+      ],
+      "properties": {
+        "regime": { "type": "string" },
+        "breadth": { "type": "string" },
+        "rates": { "type": "string" },
+        "liquidity": { "type": "string" },
+        "calculation_note": { "type": "string" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefList" }
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assessment", "reason", "evidence_refs"],
+      "properties": {
+        "assessment": { "enum": ["strong", "medium", "weak", "unknown"] },
+        "reason": { "type": "string" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefList" }
+      }
+    },
+    "textWithRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "evidence_refs"],
+      "properties": {
+        "text": { "type": "string" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefList" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "security_id",
+        "symbol",
+        "name",
+        "role",
+        "thesis",
+        "bull_case",
+        "bear_case",
+        "risk_verdict",
+        "evidence_refs",
+        "market_evidence_refs",
+        "financial_fact_refs",
+        "invalidation_conditions",
+        "data_gaps",
+        "risk_flags",
+        "manual_review_items"
+      ],
+      "properties": {
+        "security_id": { "$ref": "#/$defs/identifier" },
+        "symbol": { "$ref": "#/$defs/symbol" },
+        "name": { "type": "string" },
+        "role": { "enum": ["leader", "platform", "beneficiary", "speculative"] },
+        "thesis": { "type": "string" },
+        "bull_case": { "$ref": "#/$defs/textWithRefs" },
+        "bear_case": { "$ref": "#/$defs/textWithRefs" },
+        "risk_verdict": { "$ref": "#/$defs/textWithRefs" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefList" },
+        "market_evidence_refs": { "$ref": "#/$defs/evidenceRefList" },
+        "financial_fact_refs": { "$ref": "#/$defs/evidenceRefList" },
+        "invalidation_conditions": { "type": "array", "items": { "type": "string" } },
+        "data_gaps": { "type": "array", "items": { "type": "string" } },
+        "risk_flags": { "type": "array", "items": { "type": "string" } },
+        "manual_review_items": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "theme_id",
+        "name",
+        "event_type",
+        "stage",
+        "dimensions",
+        "transmission_chain",
+        "next_catalyst_at",
+        "evidence_refs",
+        "data_gaps",
+        "candidates"
+      ],
+      "properties": {
+        "theme_id": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string" },
+        "event_type": { "type": "string" },
+        "stage": {
+          "enum": ["discovery", "confirming", "expanding", "crowded", "diverging", "fading"]
+        },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["materiality", "novelty", "breadth", "durability", "timeliness"],
+          "properties": {
+            "materiality": { "$ref": "#/$defs/dimension" },
+            "novelty": { "$ref": "#/$defs/dimension" },
+            "breadth": { "$ref": "#/$defs/dimension" },
+            "durability": { "$ref": "#/$defs/dimension" },
+            "timeliness": { "$ref": "#/$defs/dimension" }
+          }
+        },
+        "transmission_chain": { "type": "array", "items": { "type": "string" } },
+        "next_catalyst_at": { "type": "string", "format": "date-time" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefList" },
+        "data_gaps": { "type": "array", "items": { "type": "string" } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/candidate" } }
+      }
+    }
+  }
+}

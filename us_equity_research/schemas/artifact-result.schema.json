@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/us-equity-research/artifact-result.schema.json",
+  "title": "US equity research artifact read result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "market",
+    "artifact_id",
+    "section",
+    "content_type",
+    "content",
+    "truncated",
+    "relative_path"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "US" },
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
+      "maxLength": 128
+    },
+    "section": {
+      "enum": ["summary", "report", "manifest", "packet"]
+    },
+    "content_type": {
+      "enum": ["application/json", "text/markdown"]
+    },
+    "content": { "type": "string" },
+    "truncated": { "type": "boolean" },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
+    }
+  }
+}
