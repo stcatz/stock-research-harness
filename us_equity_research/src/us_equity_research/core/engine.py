@@ -199,7 +199,7 @@ def _evaluate_candidate(
         "official_primary": bool(official_primary),
         "structured_market": bool(structured_market),
         "transmission_chain": len(theme["transmission_chain"]) >= 3,
-        "three_viewpoints": _has_three_viewpoints(candidate),
+        "three_viewpoints": _has_three_viewpoints(candidate, set(usable_evidence_refs)),
         "invalidation": bool(invalidation_conditions),
         "future_catalyst": next_catalyst_at > request.decision_at,
         "no_time_leaks": not time_leak_evidence_refs,
@@ -219,6 +219,7 @@ def _evaluate_candidate(
         decision = "exclude"
     elif (
         stage in {"crowded", "diverging"}
+        or not gates["three_viewpoints"]
         or not gates["no_time_leaks"]
         or not gates["issuer_specific_official"]
         or not gates["calculations_complete"]
@@ -283,9 +284,16 @@ def _collect_candidate_evidence_refs(candidate: Mapping[str, Any]) -> list[str]:
     return _unique_strings(refs)
 
 
-def _has_three_viewpoints(candidate: Mapping[str, Any]) -> bool:
+def _has_three_viewpoints(
+    candidate: Mapping[str, Any],
+    usable_evidence_refs: set[str],
+) -> bool:
     return all(
-        candidate[case_name].get("text") and candidate[case_name].get("evidence_refs")
+        candidate[case_name].get("text")
+        and any(
+            evidence_ref in usable_evidence_refs
+            for evidence_ref in candidate[case_name].get("evidence_refs", [])
+        )
         for case_name in ("bull_case", "bear_case", "risk_verdict")
     )
 
@@ -305,7 +313,7 @@ def _build_reasons(
     if not gates["transmission_chain"]:
         reasons.append("Transmission chain must contain at least three links.")
     if not gates["three_viewpoints"]:
-        reasons.append("Bull, bear, and risk viewpoints must all be present.")
+        reasons.append("Bull, bear, and risk viewpoints need usable supporting evidence.")
     if not gates["invalidation"]:
         reasons.append("Invalidation conditions are required.")
     if not gates["future_catalyst"]:

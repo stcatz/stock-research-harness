@@ -267,6 +267,26 @@ class EngineTests(unittest.TestCase):
         )
         self.assertEqual(fading_packet["all_decisions"][0]["decision"], "exclude")
 
+    def test_missing_viewpoint_support_blocks_observe_and_sets_reason(self) -> None:
+        raw = copy.deepcopy(_load_demo_snapshot())
+        raw["themes"][0]["candidates"][0]["bull_case"]["evidence_refs"] = []  # type: ignore[index]
+        snapshot = validate_snapshot(raw)
+
+        packet = build_research_packet(
+            snapshot,
+            _request("stock_research", symbol="DEMOA"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+        decision = packet["all_decisions"][0]
+
+        self.assertNotEqual(decision["decision"], "observe")
+        self.assertEqual(decision["decision"], "continue_research")
+        self.assertFalse(decision["gates"]["three_viewpoints"])
+        self.assertIn(
+            "Bull, bear, and risk viewpoints need usable supporting evidence.",
+            decision["reasons"],
+        )
+
     def test_post_cutoff_candidate_fact_is_removed_and_warned(self) -> None:
         raw = copy.deepcopy(_load_demo_snapshot())
         raw["financial_facts"].append(  # type: ignore[index]
