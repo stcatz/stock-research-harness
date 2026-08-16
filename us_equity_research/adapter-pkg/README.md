@@ -31,9 +31,11 @@ The snapshot field is named `snapshot_id`; the legacy `id` alias is intentionall
 
 The adapter keeps domain outcomes such as `partial`, `UNKNOWN`, and explicit data gaps as successful results. Contract and not-found errors remain structured. Process failures, timeouts, integrity failures, invalid handshakes, or non-canonical output are infrastructure errors.
 
+Model-visible structured run results preserve up to 20 focus candidates, matching the public `top_n` maximum. Warnings and gaps are bounded previews of up to five items each. Use `us_artifact_read` for the complete report or longer narrative instead of expecting it in the run result.
+
 ## Runtime boundaries
 
-The child receives a minimal system-variable allowlist and no model/data API credentials. Cancellation is forwarded from `exec.signal`; on Unix/macOS the complete child process group is terminated. CLI output, rendered content, lists, errors, paths, and secret-like values are bounded or redacted before reaching the model.
+The child receives a minimal system-variable allowlist and no model/data API credentials. Cancellation is forwarded from `exec.signal`; on supported macOS/Linux systems the complete child process group is terminated. CLI output, rendered content, lists, errors, paths, and secret-like values are bounded or redacted before reaching the model.
 
 Optional deployment overrides:
 

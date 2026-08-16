@@ -346,6 +346,20 @@ test('sanitizers whitelist, redact paths and secrets, and bound model-visible ou
   assert.doesNotMatch(artifact.content, /private\/alice|etc\/private|top-secret/)
 })
 
+test('structured run output preserves all 20 public focus items', () => {
+  const focus = Array.from({ length: 20 }, (_, index) => ({
+    symbol: `DEMO${String.fromCharCode(65 + index)}`,
+    name: `Synthetic Company ${index + 1}`,
+    theme: 'Synthetic Theme',
+    decision: index % 2 === 0 ? 'observe' : 'continue_research',
+    reason: `bounded fixture reason ${index + 1}`,
+  }))
+  const result = sanitizeResearchRunResult(canonicalRun({ focus }))
+  assert.equal('error' in result, false)
+  assert.equal(result.focus.length, 20)
+  assert.deepEqual(result.focus.map((item) => item.symbol), focus.map((item) => item.symbol))
+})
+
 test('artifact bridge keeps domain errors structured and rejects infrastructure errors', async () => {
   const { projectRoot } = await makeTempProject()
   await writeFakePython(projectRoot)

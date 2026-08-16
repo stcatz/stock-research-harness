@@ -114,6 +114,8 @@ const DEFAULT_TIMEOUT_MS = 120000
 const MAX_TIMEOUT_MS = 600000
 const MAX_CLI_OUTPUT_BYTES = 262144
 const MAX_RENDER_CHARS = 22000
+const MAX_FOCUS_ITEMS = 20
+const MAX_PREVIEW_ITEMS = 5
 const TERMINATION_GRACE_MS = 750
 const DOMAIN_CLI_ERRORS = new Set(['ContractError', 'JSONDecodeError', 'KeyError', 'ValueError'])
 const CHILD_ENV_ALLOWLIST = [
@@ -389,7 +391,11 @@ function boundedOptionalText(value: unknown, field: string, maxLength: number): 
   return result || undefined
 }
 
-function sanitizeStringArray(value: unknown, field: string, maxItems = 5): string[] {
+function sanitizeStringArray(
+  value: unknown,
+  field: string,
+  maxItems = MAX_PREVIEW_ITEMS,
+): string[] {
   if (value == null) {
     return []
   }
@@ -444,7 +450,7 @@ function sanitizeFocus(value: unknown): RunSuccessResult['focus'] {
   if (!Array.isArray(value)) {
     throw new Error('focus must be an array')
   }
-  return value.slice(0, 5).flatMap((item, index) => {
+  return value.slice(0, MAX_FOCUS_ITEMS).flatMap((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       return []
     }

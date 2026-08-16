@@ -16,6 +16,8 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const MAX_TIMEOUT_MS = 600000;
 const MAX_CLI_OUTPUT_BYTES = 262144;
 const MAX_RENDER_CHARS = 22000;
+const MAX_FOCUS_ITEMS = 20;
+const MAX_PREVIEW_ITEMS = 5;
 const TERMINATION_GRACE_MS = 750;
 const DOMAIN_CLI_ERRORS = new Set([
     'ContractError',
@@ -287,7 +289,7 @@ function boundedOptionalText(value, field, maxLength) {
     const result = boundedVisibleText(value, field, maxLength);
     return result || undefined;
 }
-function sanitizeStringArray(value, field, maxItems = 5) {
+function sanitizeStringArray(value, field, maxItems = MAX_PREVIEW_ITEMS) {
     if (value == null) {
         return [];
     }
@@ -340,7 +342,7 @@ function sanitizeFocus(value) {
     if (!Array.isArray(value)) {
         throw new Error('focus must be an array');
     }
-    return value.slice(0, 5).flatMap((item, index)=>{
+    return value.slice(0, MAX_FOCUS_ITEMS).flatMap((item, index)=>{
         if (!item || typeof item !== 'object' || Array.isArray(item)) {
             return [];
         }
