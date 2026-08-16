@@ -9,7 +9,12 @@ from importlib.resources import files
 from pathlib import Path
 
 from us_equity_research.core.contracts import ArtifactReadRequest, ContractError, RunRequest
-from us_equity_research.core.snapshot import load_snapshot, validate_snapshot
+from us_equity_research.core.snapshot import (
+    MAX_LATEST_CANDIDATES,
+    MAX_SNAPSHOT_BYTES,
+    load_snapshot,
+    validate_snapshot,
+)
 
 
 class RunRequestTests(unittest.TestCase):
@@ -523,6 +528,32 @@ class SnapshotContractTests(unittest.TestCase):
 
             self.assertEqual(load_snapshot(workspace, request).snapshot_id, "zz-same-time")
 
+    def test_latest_snapshot_ignores_direct_child_symlink_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            base = workspace / "data" / "normalized" / "us"
+            safe = copy.deepcopy(self.demo)
+            safe["snapshot_id"] = "safe-latest"
+            safe_path = base / "safe-latest" / "snapshot.json"
+            safe_path.parent.mkdir(parents=True)
+            safe_path.write_text(json.dumps(safe), encoding="utf-8")
+
+            outside_dir = workspace / "outside-symlink-dir"
+            outside_dir.mkdir()
+            (outside_dir / "snapshot.json").write_text(json.dumps(self.demo), encoding="utf-8")
+            (base / "zz-link").parent.mkdir(parents=True, exist_ok=True)
+            (base / "zz-link").symlink_to(outside_dir, target_is_directory=True)
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "latest"},
+                }
+            )
+            self.assertEqual(load_snapshot(workspace, request).snapshot_id, "safe-latest")
+
     def test_snapshot_id_lookup_uses_safe_us_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -548,6 +579,98 @@ class SnapshotContractTests(unittest.TestCase):
             self.assertEqual(
                 load_snapshot(workspace, request).snapshot_id, self.demo["snapshot_id"]
             )
+
+    def test_snapshot_id_rejects_symlinked_snapshot_file_without_following_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            snapshot_id = "unsafe-link-file"
+            outside_target = workspace / "outside-target.json"
+            outside_target.write_text("not-json", encoding="utf-8")
+            snapshot_dir = workspace / "data" / "normalized" / "us" / snapshot_id
+            snapshot_dir.mkdir(parents=True)
+            (snapshot_dir / "snapshot.json").symlink_to(outside_target)
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
+                }
+            )
+            with self.assertRaisesRegex(ContractError, "unsafe") as context:
+                load_snapshot(workspace, request)
+            message = str(context.exception)
+            self.assertNotIn(str(outside_target), message)
+            self.assertNotIn(str(workspace.resolve()), message)
+
+    def test_snapshot_id_rejects_symlinked_snapshot_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            snapshot_id = "unsafe-link-dir"
+            outside_dir = workspace / "outside-dir"
+            outside_dir.mkdir()
+            (outside_dir / "snapshot.json").write_text(json.dumps(self.demo), encoding="utf-8")
+            base = workspace / "data" / "normalized" / "us"
+            base.mkdir(parents=True)
+            (base / snapshot_id).symlink_to(outside_dir, target_is_directory=True)
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
+                }
+            )
+            with self.assertRaisesRegex(ContractError, "unsafe") as context:
+                load_snapshot(workspace, request)
+            message = str(context.exception)
+            self.assertNotIn(str(outside_dir), message)
+            self.assertNotIn(str(workspace.resolve()), message)
+
+    def test_snapshot_id_rejects_oversized_file_without_leaking_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            snapshot_id = "too-large"
+            snapshot_path = workspace / "data" / "normalized" / "us" / snapshot_id / "snapshot.json"
+            snapshot_path.parent.mkdir(parents=True)
+            with snapshot_path.open("wb") as handle:
+                handle.truncate(MAX_SNAPSHOT_BYTES + 1)
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
+                }
+            )
+            with self.assertRaisesRegex(ContractError, "MAX_SNAPSHOT_BYTES") as context:
+                load_snapshot(workspace, request)
+            message = str(context.exception)
+            self.assertNotIn(str(snapshot_path), message)
+            self.assertNotIn(str(workspace.resolve()), message)
+
+    def test_latest_snapshot_rejects_too_many_candidates_before_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            base = workspace / "data" / "normalized" / "us"
+            for index in range(MAX_LATEST_CANDIDATES + 1):
+                path = base / f"candidate-{index:03d}" / "snapshot.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{not-json", encoding="utf-8")
+
+            request = RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T12:00:00-04:00",
+                    "snapshot": {"selector": "latest"},
+                }
+            )
+            with self.assertRaisesRegex(ContractError, "MAX_LATEST_CANDIDATES"):
+                load_snapshot(workspace, request)
 
 
 if __name__ == "__main__":

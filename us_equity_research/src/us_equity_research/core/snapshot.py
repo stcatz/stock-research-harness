@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -36,6 +38,8 @@ from .contracts import (
 
 PIT_QUALITIES = ("P1", "P2", "P3", "RECONSTRUCTED_NON_PIT", "FIXTURE")
 DATA_MODES = ("fixture", "snapshot")
+MAX_SNAPSHOT_BYTES = 5 * 1024 * 1024
+MAX_LATEST_CANDIDATES = 64
 
 
 @dataclass(frozen=True)
@@ -62,10 +66,7 @@ class ValidatedSnapshot:
 
 def load_snapshot(workspace: Path, request: RunRequest) -> ValidatedSnapshot:
     if request.snapshot_selector == "demo":
-        resource = files("us_equity_research.fixtures").joinpath("demo_snapshot.json")
-        with resource.open("r", encoding="utf-8") as handle:
-            raw = json.load(handle)
-        return validate_snapshot(raw)
+        return validate_snapshot(_read_fixture_json())
 
     if request.snapshot_selector == "latest":
         return _latest_snapshot(workspace)
@@ -73,7 +74,12 @@ def load_snapshot(workspace: Path, request: RunRequest) -> ValidatedSnapshot:
     if request.snapshot_id is None:  # guarded by RunRequest; keeps type narrowing explicit
         raise ContractError("snapshot_id is required")
     validate_identifier(request.snapshot_id, "snapshot.snapshot_id")
-    return validate_snapshot(_read_json(_snapshot_by_id(workspace, request.snapshot_id)))
+    snapshot_path = _snapshot_by_id(workspace, request.snapshot_id)
+    try:
+        raw = _read_workspace_json(snapshot_path, error_context=f"snapshot {request.snapshot_id}")
+    except MissingSnapshotError as exc:
+        raise ContractError(f"snapshot not found: {request.snapshot_id}") from exc
+    return validate_snapshot(raw)
 
 
 def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
@@ -568,29 +574,110 @@ def _validate_string_list(raw: Any, field: str, *, allow_empty: bool = False) ->
 
 
 def _latest_snapshot(workspace: Path) -> ValidatedSnapshot:
-    normalized = workspace / "data" / "normalized" / "us"
-    candidates = list(normalized.glob("*/snapshot.json"))
-    if not candidates:
-        raise ContractError(
-            f"no normalized snapshot found below {normalized}; use snapshot.selector=demo explicitly"
-        )
+    normalized = _snapshot_root(workspace)
+    candidates = _latest_candidate_paths(normalized)
     validated_candidates: list[ValidatedSnapshot] = []
     for path in candidates:
-        validated_candidates.append(validate_snapshot(_read_json(path)))
+        try:
+            raw = _read_workspace_json(path, error_context="snapshot.selector=latest candidate")
+        except (MissingSnapshotError, UnsafeSnapshotError):
+            continue
+        validated_candidates.append(validate_snapshot(raw))
+    if not validated_candidates:
+        raise ContractError(
+            "no normalized snapshot found below data/normalized/us; use snapshot.selector=demo explicitly"
+        )
     return max(validated_candidates, key=lambda item: (item.retrieved_at, item.snapshot_id))
 
 
 def _snapshot_by_id(workspace: Path, snapshot_id: str) -> Path:
-    path = workspace / "data" / "normalized" / "us" / snapshot_id / "snapshot.json"
-    if path.is_file():
-        return path
-    raise ContractError(f"snapshot not found: {snapshot_id}")
+    root = _snapshot_root(workspace)
+    snapshot_dir = root / snapshot_id
+    try:
+        metadata = snapshot_dir.lstat()
+    except FileNotFoundError as exc:
+        raise ContractError(f"snapshot not found: {snapshot_id}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ContractError(f"snapshot {snapshot_id} is unsafe")
+    return snapshot_dir / "snapshot.json"
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        raw = json.load(handle)
-    return require_mapping(raw, f"snapshot file {path}")
+def _read_fixture_json() -> dict[str, Any]:
+    resource = files("us_equity_research.fixtures").joinpath("demo_snapshot.json")
+    return _parse_snapshot_bytes(resource.read_bytes(), "packaged demo snapshot")
+
+
+def _snapshot_root(workspace: Path) -> Path:
+    return workspace / "data" / "normalized" / "us"
+
+
+def _latest_candidate_paths(root: Path) -> list[Path]:
+    try:
+        entries = sorted(os.scandir(root), key=lambda entry: entry.name)
+    except OSError as exc:
+        raise ContractError(
+            "no normalized snapshot found below data/normalized/us; use snapshot.selector=demo explicitly"
+        ) from exc
+
+    snapshot_dirs = [entry for entry in entries if entry.is_dir(follow_symlinks=False)]
+    if len(snapshot_dirs) > MAX_LATEST_CANDIDATES:
+        raise ContractError(
+            f"snapshot.selector=latest exceeds MAX_LATEST_CANDIDATES={MAX_LATEST_CANDIDATES}"
+        )
+    return [Path(entry.path) / "snapshot.json" for entry in snapshot_dirs]
+
+
+def _read_workspace_json(path: Path, *, error_context: str) -> dict[str, Any]:
+    return _parse_snapshot_bytes(
+        _read_workspace_snapshot_bytes(path, error_context=error_context),
+        error_context,
+    )
+
+
+def _read_workspace_snapshot_bytes(path: Path, *, error_context: str) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags |= nofollow
+
+    if nofollow == 0 and path.is_symlink():
+        raise UnsafeSnapshotError(f"{error_context} is unsafe")
+
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise MissingSnapshotError(f"{error_context} not found") from exc
+    except OSError as exc:
+        raise UnsafeSnapshotError(f"{error_context} is unsafe") from exc
+
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise UnsafeSnapshotError(f"{error_context} is unsafe")
+        if metadata.st_size > MAX_SNAPSHOT_BYTES:
+            raise ContractError(f"{error_context} exceeds MAX_SNAPSHOT_BYTES={MAX_SNAPSHOT_BYTES}")
+
+        payload = bytearray()
+        while True:
+            chunk = os.read(descriptor, min(65536, MAX_SNAPSHOT_BYTES + 1 - len(payload)))
+            if not chunk:
+                break
+            payload.extend(chunk)
+            if len(payload) > MAX_SNAPSHOT_BYTES:
+                raise ContractError(
+                    f"{error_context} exceeds MAX_SNAPSHOT_BYTES={MAX_SNAPSHOT_BYTES}"
+                )
+        return bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
+def _parse_snapshot_bytes(payload: bytes, field: str) -> dict[str, Any]:
+    if len(payload) > MAX_SNAPSHOT_BYTES:
+        raise ContractError(f"{field} exceeds MAX_SNAPSHOT_BYTES={MAX_SNAPSHOT_BYTES}")
+    raw = json.loads(payload)
+    return require_mapping(raw, field)
 
 
 def _parse_date(value: Any, field: str) -> date:
@@ -604,3 +691,11 @@ def _parse_date(value: Any, field: str) -> date:
 def _sha256_value(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class UnsafeSnapshotError(ContractError):
+    """Raised when a snapshot path is unsafe to ingest."""
+
+
+class MissingSnapshotError(ContractError):
+    """Raised when a snapshot payload is missing during ingestion."""
