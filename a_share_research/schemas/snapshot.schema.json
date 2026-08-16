@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/a-share-research/snapshot.schema.json",
+  "title": "A-share point-in-time research snapshot",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "market",
+    "snapshot_id",
+    "data_mode",
+    "pit_quality",
+    "as_of",
+    "retrieved_at",
+    "market_context",
+    "evidence",
+    "themes"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "data_mode": { "enum": ["fixture", "snapshot"] },
+    "pit_quality": {
+      "enum": ["FIXTURE", "P1", "P2", "P3", "RECONSTRUCTED_NON_PIT"]
+    },
+    "as_of": { "type": "string", "format": "date-time" },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "evidence_id",
+          "category",
+          "source_level",
+          "title",
+          "source_url",
+          "published_at",
+          "available_at",
+          "retrieved_at",
+          "as_of",
+          "summary"
+        ],
+        "properties": {
+          "source_level": {
+            "enum": ["official", "structured_market", "industry", "secondary"]
+          },
+          "source_url": { "type": "string", "format": "uri" }
+        }
+      }
+    },
+    "themes": { "type": "array" }
+  }
+}

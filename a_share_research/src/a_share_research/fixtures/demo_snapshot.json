@@ -1,0 +1,229 @@
+{
+  "schema_version": "0.1",
+  "market": "CN",
+  "snapshot_id": "cn-demo-20260816",
+  "data_mode": "fixture",
+  "pit_quality": "FIXTURE",
+  "as_of": "2026-08-15T15:00:00+08:00",
+  "retrieved_at": "2026-08-16T10:05:00+08:00",
+  "fixture_notice": "全部公司、代码、事件、数字和链接均为安装测试用合成数据，不代表真实市场事实。",
+  "market_context": {
+    "regime": "示例：整理",
+    "breadth": "示例：板块宽度中性",
+    "liquidity": "示例：成交活跃度中性",
+    "calculation_note": "由合成日线样本确定性生成，仅用于验证工作流。",
+    "evidence_refs": ["EV-MARKET-001"]
+  },
+  "evidence": [
+    {
+      "evidence_id": "EV-MARKET-001",
+      "category": "market_data",
+      "source_level": "structured_market",
+      "title": "DEMO：合成板块与成交数据",
+      "source_url": "https://market.example.invalid/cn-demo-20260815",
+      "published_at": "2026-08-15T15:20:00+08:00",
+      "available_at": "2026-08-15T15:20:00+08:00",
+      "retrieved_at": "2026-08-16T07:20:00+08:00",
+      "as_of": "2026-08-15T15:00:00+08:00",
+      "summary": "合成样本显示示例算力主题有三只成分股同步走强，成交活跃度较前一日改善。"
+    },
+    {
+      "evidence_id": "EV-POLICY-001",
+      "category": "official_event",
+      "source_level": "official",
+      "title": "DEMO：合成算力基础设施政策文件",
+      "source_url": "https://policy.example.invalid/demo-compute-policy",
+      "published_at": "2026-08-15T18:00:00+08:00",
+      "available_at": "2026-08-15T18:00:00+08:00",
+      "retrieved_at": "2026-08-16T07:10:00+08:00",
+      "as_of": "2026-08-15T18:00:00+08:00",
+      "summary": "合成政策样本提出扩大高效算力设施的示范应用。"
+    },
+    {
+      "evidence_id": "EV-COMPANY-001",
+      "category": "company_disclosure",
+      "source_level": "official",
+      "title": "DEMO：示例算力公司甲项目公告",
+      "source_url": "https://disclosure.example.invalid/demo-company-a",
+      "published_at": "2026-08-15T19:00:00+08:00",
+      "available_at": "2026-08-15T19:00:00+08:00",
+      "retrieved_at": "2026-08-16T07:12:00+08:00",
+      "as_of": "2026-08-15T19:00:00+08:00",
+      "summary": "合成公告样本称公司甲获得一个可核验的示范项目。"
+    },
+    {
+      "evidence_id": "EV-INDUSTRY-001",
+      "category": "industry_data",
+      "source_level": "industry",
+      "title": "DEMO：合成设备交付周期样本",
+      "source_url": "https://industry.example.invalid/demo-delivery-cycle",
+      "published_at": "2026-08-14T16:00:00+08:00",
+      "available_at": "2026-08-14T16:00:00+08:00",
+      "retrieved_at": "2026-08-16T07:15:00+08:00",
+      "as_of": "2026-08-14T16:00:00+08:00",
+      "summary": "合成行业样本显示设备交付周期略有延长，但尚不能证明行业全面景气。"
+    },
+    {
+      "evidence_id": "EV-SECONDARY-001",
+      "category": "attention",
+      "source_level": "secondary",
+      "title": "DEMO：合成市场关注度样本",
+      "source_url": "https://attention.example.invalid/demo-theme",
+      "published_at": "2026-08-15T21:00:00+08:00",
+      "available_at": "2026-08-15T21:00:00+08:00",
+      "retrieved_at": "2026-08-16T07:18:00+08:00",
+      "as_of": "2026-08-15T21:00:00+08:00",
+      "summary": "合成关注度样本只用于观察讨论热度，不能证明公司受益。"
+    },
+    {
+      "evidence_id": "EV-FUTURE-001",
+      "category": "official_event",
+      "source_level": "official",
+      "title": "DEMO：研究时点之后才可见的合成公告",
+      "source_url": "https://disclosure.example.invalid/demo-future-event",
+      "published_at": "2026-08-16T10:00:00+08:00",
+      "available_at": "2026-08-16T10:00:00+08:00",
+      "retrieved_at": "2026-08-16T10:01:00+08:00",
+      "as_of": "2026-08-16T10:00:00+08:00",
+      "summary": "该样本故意晚于默认 decision_at，用于验证防时间穿越。"
+    }
+  ],
+  "themes": [
+    {
+      "theme_id": "theme-demo-compute",
+      "name": "示例算力基础设施",
+      "event_type": "policy",
+      "stage": "warming",
+      "dimensions": {
+        "big": {
+          "assessment": "strong",
+          "reason": "合成样本覆盖基础设施与设备两个环节。",
+          "evidence_refs": ["EV-POLICY-001", "EV-INDUSTRY-001"]
+        },
+        "new": {
+          "assessment": "medium",
+          "reason": "存在新增政策样本，但与原有预期差需人工复核。",
+          "evidence_refs": ["EV-POLICY-001"]
+        },
+        "many": {
+          "assessment": "medium",
+          "reason": "合成行情中不止单一标的有同步确认。",
+          "evidence_refs": ["EV-MARKET-001"]
+        },
+        "durable": {
+          "assessment": "medium",
+          "reason": "存在下一示范节点，但持续性仍未知。",
+          "evidence_refs": ["EV-POLICY-001"]
+        },
+        "timely": {
+          "assessment": "strong",
+          "reason": "事件和市场数据均早于研究时点。",
+          "evidence_refs": ["EV-POLICY-001", "EV-MARKET-001"]
+        }
+      },
+      "evidence_refs": ["EV-POLICY-001", "EV-INDUSTRY-001", "EV-MARKET-001"],
+      "transmission_chain": [
+        "示例政策扩大示范应用",
+        "示例设施需求可能增加",
+        "示例设备交付与项目收入可能变化",
+        "公司利润影响仍需用正式财务数据验证"
+      ],
+      "next_catalyst_at": "2026-08-20T09:00:00+08:00",
+      "counter_thesis": "政策样本可能只是存量项目重述，无法证明新增订单和利润贡献。",
+      "invalidation_conditions": [
+        "正式文件不包含新增投入或示范范围",
+        "公司后续公告无法验证项目收入贡献"
+      ],
+      "data_gaps": ["真实政策原文、真实行情和正式财务数据均未接入"],
+      "candidates": [
+        {
+          "security_id": "CN.DEMO.001",
+          "symbol": "DEMO001",
+          "name": "示例算力公司甲",
+          "role": "core",
+          "thesis": "合成公告与合成板块数据构成双重验证，仅用于测试观察流程。",
+          "counter_thesis": "示范项目规模可能不足以影响财务结果。",
+          "evidence_refs": ["EV-POLICY-001", "EV-COMPANY-001", "EV-INDUSTRY-001"],
+          "market_evidence_refs": ["EV-MARKET-001"],
+          "invalidation_conditions": ["正式公告无法支持项目与主营业务关联"],
+          "data_gaps": [],
+          "risk_flags": ["DEMO_ONLY"],
+          "manual_review_items": ["复核政策原文", "复核项目金额与财务口径"]
+        },
+        {
+          "security_id": "CN.DEMO.002",
+          "symbol": "DEMO002",
+          "name": "示例设备公司乙",
+          "role": "elastic",
+          "thesis": "设备环节可能受益，但缺少公司自身正式披露。",
+          "counter_thesis": "行业交付周期变化可能来自短期供给扰动。",
+          "evidence_refs": ["EV-POLICY-001", "EV-INDUSTRY-001"],
+          "market_evidence_refs": ["EV-MARKET-001"],
+          "invalidation_conditions": ["公司公告无法确认相关产品收入占比"],
+          "data_gaps": ["缺少公司自身正式披露"],
+          "risk_flags": ["DEMO_ONLY", "BUSINESS_PURITY_UNKNOWN"],
+          "manual_review_items": ["核对主营构成", "核对产能与交付能力"]
+        }
+      ]
+    },
+    {
+      "theme_id": "theme-demo-concept",
+      "name": "示例概念映射",
+      "event_type": "comparison",
+      "stage": "climax",
+      "dimensions": {
+        "big": {
+          "assessment": "unknown",
+          "reason": "只有关注度线索，缺少事实依据。",
+          "evidence_refs": ["EV-SECONDARY-001"]
+        },
+        "new": {
+          "assessment": "weak",
+          "reason": "研究时点前没有可用的新增官方事件。",
+          "evidence_refs": ["EV-SECONDARY-001"]
+        },
+        "many": {
+          "assessment": "unknown",
+          "reason": "没有同期结构化板块样本。",
+          "evidence_refs": ["EV-SECONDARY-001"]
+        },
+        "durable": {
+          "assessment": "weak",
+          "reason": "未发现后续可验证催化。",
+          "evidence_refs": ["EV-SECONDARY-001"]
+        },
+        "timely": {
+          "assessment": "weak",
+          "reason": "唯一官方样本在研究时点之后才可见。",
+          "evidence_refs": ["EV-FUTURE-001"]
+        }
+      },
+      "evidence_refs": ["EV-SECONDARY-001", "EV-FUTURE-001"],
+      "transmission_chain": [
+        "市场讨论出现概念映射",
+        "尚未找到产业影响",
+        "尚未找到收入或利润传导"
+      ],
+      "next_catalyst_at": "2026-08-30T09:00:00+08:00",
+      "counter_thesis": "讨论热度无法证明公司业务受益，且题材已处于合成高潮阶段。",
+      "invalidation_conditions": ["没有研究时点前可用的正式文件"],
+      "data_gaps": ["缺少官方事件", "缺少同期结构化市场证据"],
+      "candidates": [
+        {
+          "security_id": "CN.DEMO.003",
+          "symbol": "DEMO003",
+          "name": "示例概念公司丙",
+          "role": "follower",
+          "thesis": "只有二手关注度线索。",
+          "counter_thesis": "公司与题材的业务关系未知。",
+          "evidence_refs": ["EV-SECONDARY-001", "EV-FUTURE-001"],
+          "market_evidence_refs": [],
+          "invalidation_conditions": ["无法找到研究时点前的官方证据"],
+          "data_gaps": ["官方证据未知", "市场数据未知"],
+          "risk_flags": ["DEMO_ONLY", "CLIMAX", "TIME_LEAK_TEST"],
+          "manual_review_items": ["停止使用时点之后的公告", "验证公司主营业务"]
+        }
+      ]
+    }
+  ]
+}

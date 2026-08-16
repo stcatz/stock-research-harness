@@ -1,0 +1,33 @@
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.ruff_cache/
+**/node_modules/
+**/.DS_Store
+
+# Runtime research data and generated artifacts never belong in the open-source repository.
+data/
+materials/
+reports/
+journal/
+research/
+a_share_research/data/
+a_share_research/materials/**
+a_share_research/artifacts/**
+a_share_research/reports/
+us_equity_research/data/
+us_equity_research/materials/**
+us_equity_research/artifacts/**
+us_equity_research/reports/
+!a_share_research/materials/.gitkeep
+!a_share_research/artifacts/.gitkeep
+!us_equity_research/materials/.gitkeep
+!us_equity_research/artifacts/.gitkeep
+
+# Preserve local historical residues without accidentally publishing them.
+**/*nmkdir/
+**/*_junk/
+**/*_old/
+**/_legacy_copy_from_init/

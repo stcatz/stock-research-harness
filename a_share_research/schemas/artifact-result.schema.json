@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/a-share-research/artifact-result.schema.json",
+  "title": "A-share research artifact summary",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "market",
+    "run_id",
+    "artifact_id",
+    "status",
+    "writer_mode",
+    "data_mode",
+    "pit_quality",
+    "workflow",
+    "decision_at",
+    "snapshot_id",
+    "analysis_hash",
+    "counts",
+    "focus",
+    "warnings",
+    "gaps",
+    "available_sections"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "run_id": { "type": "string" },
+    "artifact_id": { "type": "string" },
+    "status": { "const": "completed" },
+    "writer_mode": { "const": "engine" },
+    "data_mode": { "enum": ["fixture", "snapshot"] },
+    "pit_quality": {
+      "enum": ["FIXTURE", "P1", "P2", "P3", "RECONSTRUCTED_NON_PIT"]
+    },
+    "workflow": {
+      "enum": ["daily_report", "stock_research", "theme_research"]
+    },
+    "decision_at": { "type": "string", "format": "date-time" },
+    "snapshot_id": { "type": "string" },
+    "analysis_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "focus": { "type": "array" },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "gaps": { "type": "array", "items": { "type": "string" } },
+    "available_sections": {
+      "type": "array",
+      "items": { "enum": ["summary", "report", "manifest", "packet"] }
+    }
+  }
+}

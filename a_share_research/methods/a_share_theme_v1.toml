@@ -1,0 +1,28 @@
+id = "a-share-theme-v1"
+market = "CN"
+purpose = "Research prioritization only; never a trading signal."
+
+[dimensions]
+big = "Assess market space and capacity separately."
+new = "Identify the new variable relative to prior expectations."
+many = "Require a plausible beneficiary set and market breadth."
+durable = "Require follow-up catalysts instead of a one-off story."
+timely = "Require evidence available before decision_at and relevant now."
+
+[minimum_observe_gates]
+official_event = true
+structured_market = true
+transmission_chain = true
+counter_thesis = true
+invalidation_conditions = true
+next_catalyst = true
+time_boundary = true
+
+[allowed_decisions]
+values = ["exclude", "continue_research", "observe"]
+
+[prohibited]
+broker_connection = true
+automatic_order = true
+target_price = true
+deterministic_price_prediction = true

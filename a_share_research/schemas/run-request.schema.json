@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/a-share-research/run-request.schema.json",
+  "title": "A-share research run request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workflow", "decision_at", "snapshot"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "workflow": {
+      "enum": ["daily_report", "stock_research", "theme_research"]
+    },
+    "decision_at": { "type": "string", "format": "date-time" },
+    "subject": { "type": "string", "minLength": 1 },
+    "symbol": { "type": "string", "minLength": 1 },
+    "top_n": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector"],
+      "properties": {
+        "selector": { "enum": ["demo", "latest", "id"] },
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "maxLength": 128
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "selector": { "const": "id" } } },
+          "then": { "required": ["snapshot_id"] },
+          "else": { "not": { "required": ["snapshot_id"] } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "workflow": { "const": "theme_research" } } },
+      "then": {
+        "required": ["subject"],
+        "not": { "required": ["symbol"] }
+      }
+    },
+    {
+      "if": { "properties": { "workflow": { "const": "stock_research" } } },
+      "then": {
+        "required": ["symbol"],
+        "not": { "required": ["subject"] }
+      }
+    },
+    {
+      "if": { "properties": { "workflow": { "const": "daily_report" } } },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["subject"] },
+            { "required": ["symbol"] }
+          ]
+        }
+      }
+    }
+  ]
+}
