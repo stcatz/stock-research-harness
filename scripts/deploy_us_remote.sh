@@ -157,6 +157,15 @@ rsync -azm --itemize-changes \
   "$local_project/" \
   "$remote_host:$remote_project/"
 
+# Seed versioned defaults when they are missing, while preserving any remote
+# prompt or template with the same name.
+for defaults_dir in prompts templates; do
+  rsync -az --ignore-existing --itemize-changes \
+    -e "ssh -o BatchMode=yes" \
+    "$local_project/$defaults_dir/" \
+    "$remote_host:$remote_project/$defaults_dir/"
+done
+
 ssh -o BatchMode=yes "$remote_host" "bash -lc '
   set -euo pipefail
   cd \"$remote_project\"

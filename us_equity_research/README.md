@@ -173,6 +173,8 @@ For remote use, prefer an SSH tunnel to a loopback-bound Web profile rather than
 2. Forward the port locally with SSH tunneling.
 3. Keep DSH profile installation explicit and manual; `scripts/deploy_us_remote.sh` intentionally does not mutate DSH profiles.
 
+The deployment script never deletes remote runtime or research assets. Existing prompts and templates are preserved; repository defaults are copied only when the corresponding remote file is missing.
+
 See `adapter-pkg/README.md` for the exact DSH package commands.
 
 ## Source policy
