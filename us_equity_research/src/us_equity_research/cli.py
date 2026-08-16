@@ -8,13 +8,15 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .core.contracts import MARKET, SCHEMA_VERSION, ArtifactReadRequest, ContractError, RunRequest
+from .core.contracts import MARKET, SCHEMA_VERSION, ContractError
+from .core.pipeline import doctor, read_artifact, run_research
+from .core.storage import initialize_workspace
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="us-equity-research",
-        description="Versioned US equity research contracts and CLI shell",
+        description="Auditable US equity research engine (research only; no trading)",
     )
     parser.add_argument(
         "--workspace",
@@ -22,24 +24,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("init", help="Create the runtime directories")
-    subparsers.add_parser("doctor", help="Check contract-only runtime availability")
+    subparsers.add_parser("init", help="Create the US SQLite database and runtime directories")
+    subparsers.add_parser("doctor", help="Check the offline US research runtime")
 
-    run_parser = subparsers.add_parser("run", help="Validate a versioned JSON research request")
+    run_parser = subparsers.add_parser("run", help="Run a versioned JSON research request")
     run_parser.add_argument(
         "--request-json",
         required=True,
         help="JSON file path or '-' to read exactly one JSON object from stdin",
     )
 
-    read_parser = subparsers.add_parser("artifact-read", help="Validate an artifact read request")
+    read_parser = subparsers.add_parser("artifact-read", help="Read one bounded artifact section")
     read_parser.add_argument(
         "--request-json",
         required=True,
         help="JSON file path or '-' to read exactly one JSON object from stdin",
     )
 
-    demo_parser = subparsers.add_parser("demo", help="Emit the canonical demo request envelope")
+    demo_parser = subparsers.add_parser("demo", help="Run the explicit synthetic fixture")
     demo_parser.add_argument(
         "--decision-at",
         default="2026-08-16T08:30:00-04:00",
@@ -55,32 +57,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     workspace = _workspace(args.workspace)
     try:
         if args.command == "init":
-            _ensure_runtime_dirs(workspace)
-            result: dict[str, Any] = {
-                "schema_version": SCHEMA_VERSION,
-                "market": MARKET,
-                "command": "init",
-                "status": "ok",
-            }
+            result: dict[str, Any] = initialize_workspace(workspace)
         elif args.command == "doctor":
-            result = {
-                "schema_version": SCHEMA_VERSION,
-                "market": MARKET,
-                "command": "doctor",
-                "status": "ok",
-                "capabilities": {
-                    "contracts": "available",
-                    "pipeline": "not_implemented",
-                },
-            }
+            result = doctor(workspace)
         elif args.command == "run":
-            request = RunRequest.from_dict(_read_json(args.request_json))
-            result = _not_implemented_result("run", request.to_dict())
+            result = run_research(_read_json(args.request_json), workspace)
         elif args.command == "artifact-read":
-            request = ArtifactReadRequest.from_dict(_read_json(args.request_json))
-            result = _not_implemented_result("artifact-read", request.to_dict())
+            result = read_artifact(_read_json(args.request_json), workspace)
         else:
-            request = RunRequest.from_dict(
+            result = run_research(
                 {
                     "schema_version": SCHEMA_VERSION,
                     "market": MARKET,
@@ -88,9 +73,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "decision_at": args.decision_at,
                     "snapshot": {"selector": "demo"},
                     "top_n": args.top_n,
-                }
+                },
+                workspace,
             )
-            result = _not_implemented_result("demo", request.to_dict())
     except (
         ContractError,
         KeyError,
@@ -115,29 +100,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def _not_implemented_result(command: str, request: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "market": MARKET,
-        "command": command,
-        "status": "not_implemented",
-        "request": request,
-    }
-
-
 def _workspace(argument: str | None) -> Path:
     configured = argument or os.environ.get("STOCK_RESEARCH_WORKSPACE")
     if configured:
         return Path(configured).expanduser().resolve()
     return Path(__file__).resolve().parents[2]
-
-
-def _ensure_runtime_dirs(workspace: Path) -> None:
-    for relative in (
-        Path("data") / "normalized" / "us",
-        Path("artifacts") / "us",
-    ):
-        (workspace / relative).mkdir(parents=True, exist_ok=True)
 
 
 def _read_json(value: str) -> dict[str, Any]:
