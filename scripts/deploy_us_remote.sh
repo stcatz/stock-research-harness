@@ -29,7 +29,17 @@ validate_remote_root() {
   fi
 }
 
+local_validation_hint() {
+  local quoted_script
+  printf -v quoted_script '%q' "$script_directory/deploy_us_remote.sh"
+  printf 'Local validation: %s --self-test\n' "$quoted_script"
+}
+
 self_test() {
+  local hint
+  local expected_hint
+  local quoted_script
+
   validate_remote_host "deployer@example-host.local"
   validate_remote_host "qa.user@mac-mini-01"
   validate_remote_root "/Users/deployer/ai/stock"
@@ -42,6 +52,14 @@ self_test() {
   ! validate_remote_host "deploy@host:22" >/dev/null 2>&1
   ! validate_remote_root "/tmp/stock" >/dev/null 2>&1
   ! validate_remote_root "/Users//ai/stock" >/dev/null 2>&1
+
+  hint="$(local_validation_hint)"
+  printf -v quoted_script '%q' "$script_directory/deploy_us_remote.sh"
+  expected_hint="Local validation: $quoted_script --self-test"
+  if [[ "$hint" != "$expected_hint" ]]; then
+    echo "Unexpected local validation hint: $hint" >&2
+    return 1
+  fi
 
   echo "deploy_us_remote.sh self-test passed"
 }
@@ -156,5 +174,5 @@ if [[ -n "$backup_path" ]]; then
   echo "Previous remote code backup: $backup_path"
 fi
 echo "DSH profiles were not modified."
-echo "Local validation: bash scripts/deploy_us_remote.sh --self-test"
+local_validation_hint
 echo "Manual next step if desired: ssh -o BatchMode=yes '$remote_host' \"dsh plugin --profile web add '$remote_project/adapter-pkg'\""
