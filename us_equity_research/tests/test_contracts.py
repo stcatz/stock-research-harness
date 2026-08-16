@@ -396,6 +396,67 @@ class SnapshotContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "close_price must reference structured_market"):
             validate_snapshot(invalid)
 
+    def test_candidate_financial_fact_refs_must_match_candidate_security(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["themes"][0]["candidates"][1]["financial_fact_refs"] = ["FACT-DEMOA-REV-TTM"]
+        with self.assertRaisesRegex(ContractError, "different security_id"):
+            validate_snapshot(invalid)
+
+    def test_duplicate_nested_refs_are_rejected(self) -> None:
+        scenarios = [
+            (
+                "snapshot.themes\\[0\\]\\.evidence_refs",
+                lambda payload: payload["themes"][0].update(
+                    {"evidence_refs": ["EV-SEC-001", "EV-SEC-001"]}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.dimensions\\.materiality\\.evidence_refs",
+                lambda payload: payload["themes"][0]["dimensions"]["materiality"].update(
+                    {"evidence_refs": ["EV-SEC-001", "EV-SEC-001"]}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.evidence_refs",
+                lambda payload: payload["themes"][0]["candidates"][0].update(
+                    {"evidence_refs": ["EV-SEC-001", "EV-SEC-001"]}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.bull_case\\.evidence_refs",
+                lambda payload: payload["themes"][0]["candidates"][0]["bull_case"].update(
+                    {"evidence_refs": ["EV-SEC-001", "EV-SEC-001"]}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.market_evidence_refs",
+                lambda payload: payload["themes"][0]["candidates"][0].update(
+                    {"market_evidence_refs": ["EV-MARKET-001", "EV-MARKET-001"]}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.financial_fact_refs",
+                lambda payload: payload["themes"][0]["candidates"][0].update(
+                    {"financial_fact_refs": ["FACT-DEMOA-REV-TTM", "FACT-DEMOA-REV-TTM"]}
+                ),
+            ),
+            (
+                "market_context.evidence_refs",
+                lambda payload: payload["market_context"].update(
+                    {"evidence_refs": ["EV-MARKET-001", "EV-MARKET-001"]}
+                ),
+            ),
+        ]
+
+        for path_pattern, mutate in scenarios:
+            invalid = copy.deepcopy(self.demo)
+            mutate(invalid)
+            with (
+                self.subTest(path_pattern=path_pattern),
+                self.assertRaisesRegex(ContractError, path_pattern),
+            ):
+                validate_snapshot(invalid)
+
     def test_market_context_requires_rates_and_valid_evidence(self) -> None:
         invalid = copy.deepcopy(self.demo)
         del invalid["market_context"]["rates"]

@@ -470,6 +470,7 @@ def _validate_theme(
             candidate.get("financial_fact_refs"),
             f"{candidate_prefix}.financial_fact_refs",
             financial_facts_by_id,
+            security_id,
         )
         _validate_string_list(
             candidate.get("invalidation_conditions"),
@@ -510,10 +511,13 @@ def _validate_refs(
     evidence_by_id: Mapping[str, dict[str, Any]],
 ) -> None:
     refs = require_list(raw, field)
+    normalized_refs: list[str] = []
     for index, ref_raw in enumerate(refs):
         ref = validate_identifier(ref_raw, f"{field}[{index}]")
         if ref not in evidence_by_id:
             raise ContractError(f"{field}[{index}] references unknown evidence: {ref}")
+        normalized_refs.append(ref)
+    ensure_unique(normalized_refs, field)
 
 
 def _validate_market_refs(
@@ -522,6 +526,7 @@ def _validate_market_refs(
     evidence_by_id: Mapping[str, dict[str, Any]],
 ) -> None:
     refs = require_list(raw, field)
+    normalized_refs: list[str] = []
     for index, ref_raw in enumerate(refs):
         ref = validate_identifier(ref_raw, f"{field}[{index}]")
         evidence = evidence_by_id.get(ref)
@@ -529,14 +534,29 @@ def _validate_market_refs(
             raise ContractError(f"{field}[{index}] references unknown evidence: {ref}")
         if evidence["source_level"] != "structured_market":
             raise ContractError(f"{field}[{index}] must reference structured_market evidence")
+        normalized_refs.append(ref)
+    ensure_unique(normalized_refs, field)
 
 
-def _validate_fact_refs(raw: Any, field: str, facts_by_id: Mapping[str, dict[str, Any]]) -> None:
+def _validate_fact_refs(
+    raw: Any,
+    field: str,
+    facts_by_id: Mapping[str, dict[str, Any]],
+    candidate_security_id: str,
+) -> None:
     refs = require_list(raw, field)
+    normalized_refs: list[str] = []
     for index, ref_raw in enumerate(refs):
         ref = validate_identifier(ref_raw, f"{field}[{index}]")
-        if ref not in facts_by_id:
+        fact = facts_by_id.get(ref)
+        if fact is None:
             raise ContractError(f"{field}[{index}] references unknown financial fact: {ref}")
+        if fact["security_id"] != candidate_security_id:
+            raise ContractError(
+                f"{field}[{index}] references financial fact from different security_id: {ref}"
+            )
+        normalized_refs.append(ref)
+    ensure_unique(normalized_refs, field)
 
 
 def _validate_string_list(raw: Any, field: str, *, allow_empty: bool = False) -> None:
