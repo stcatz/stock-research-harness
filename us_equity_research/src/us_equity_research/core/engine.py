@@ -121,6 +121,10 @@ def build_research_packet(
 
     stable_packet = deepcopy(packet)
     stable_packet.pop("generated_at", None)
+    # analysis_hash tracks stable analysis content, not raw snapshot serialization order.
+    stable_packet.pop("snapshot_hash", None)
+    stable_packet.pop("run_id", None)
+    stable_packet.pop("artifact_id", None)
     packet["analysis_hash"] = _sha256_value(stable_packet)
     return packet
 

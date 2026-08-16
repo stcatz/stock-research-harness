@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .contracts import require_string
+from .contracts import FINANCIAL_METRICS, require_string
 from .snapshot import ValidatedSnapshot
 
 CALCULATION_METRICS = (
@@ -22,6 +22,7 @@ CALCULATION_METRICS = (
 OK = "OK"
 UNKNOWN = "UNKNOWN"
 NOT_MEANINGFUL = "NOT_MEANINGFUL"
+FACT_METRIC_ORDER = {metric: index for index, metric in enumerate(FINANCIAL_METRICS)}
 
 
 def build_calculation_bundle(
@@ -30,7 +31,7 @@ def build_calculation_bundle(
     decision_at: datetime,
 ) -> dict[str, Any]:
     fact_refs = list(candidate.get("financial_fact_refs", []))
-    eligible_facts: list[dict[str, Any]] = []
+    eligible_fact_records: list[dict[str, Any]] = []
     cutoff_excluded_fact_ids: list[str] = []
     facts_by_metric: dict[str, list[dict[str, Any]]] = {}
 
@@ -38,13 +39,18 @@ def build_calculation_bundle(
         fact = dict(snapshot.financial_facts_by_id[fact_id])
         available_at = datetime.fromisoformat(fact["available_at"])
         if available_at <= decision_at:
-            eligible_facts.append(_fact_card(fact))
+            eligible_fact_records.append(fact)
             facts_by_metric.setdefault(fact["metric"], []).append(fact)
         else:
             cutoff_excluded_fact_ids.append(fact_id)
 
     for items in facts_by_metric.values():
         items.sort(key=_fact_order_key, reverse=True)
+
+    # Canonical fact ordering is independent of candidate refs or snapshot list order:
+    # group by the public contract metric order, then show the newest eligible revision first.
+    eligible_fact_records.sort(key=_fact_order_key, reverse=True)
+    eligible_fact_records.sort(key=_fact_metric_order_key)
 
     calculations = [
         _revenue_growth(facts_by_metric, cutoff_excluded_fact_ids),
@@ -72,7 +78,7 @@ def build_calculation_bundle(
     ]
 
     return {
-        "facts": eligible_facts,
+        "facts": [_fact_card(fact) for fact in eligible_fact_records],
         "calculations": calculations,
         "cutoff_excluded_fact_ids": cutoff_excluded_fact_ids,
     }
@@ -610,3 +616,8 @@ def _fact_order_key(fact: Mapping[str, Any]) -> tuple[date, datetime, str]:
         datetime.fromisoformat(require_string(fact["available_at"], "available_at", strip=False)),
         require_string(fact["fact_id"], "fact_id", strip=False),
     )
+
+
+def _fact_metric_order_key(fact: Mapping[str, Any]) -> int:
+    metric = require_string(fact["metric"], "metric", strip=False)
+    return FACT_METRIC_ORDER.get(metric, len(FACT_METRIC_ORDER))

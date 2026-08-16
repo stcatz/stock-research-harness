@@ -380,6 +380,46 @@ class EngineTests(unittest.TestCase):
         )
         self.assertEqual(packet["data_status"]["market_latest_as_of"], "2026-08-15T16:00:00-04:00")
 
+    def test_packet_facts_and_analysis_hash_are_stable_under_reversed_fact_inputs(self) -> None:
+        base_raw = copy.deepcopy(_load_demo_snapshot())
+        reversed_raw = copy.deepcopy(base_raw)
+        reversed_raw["financial_facts"].reverse()  # type: ignore[index]
+        reversed_refs = reversed_raw["themes"][0]["candidates"][0]["financial_fact_refs"]  # type: ignore[index]
+        reversed_refs[:] = list(reversed(reversed_refs))
+
+        base_snapshot = validate_snapshot(base_raw)
+        reversed_snapshot = validate_snapshot(reversed_raw)
+        base_packet = build_research_packet(
+            base_snapshot,
+            _request("stock_research", symbol="DEMOA"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+        reversed_packet = build_research_packet(
+            reversed_snapshot,
+            _request("stock_research", symbol="DEMOA"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+
+        base_decision = base_packet["all_decisions"][0]
+        reversed_decision = reversed_packet["all_decisions"][0]
+
+        self.assertEqual(
+            [fact["fact_id"] for fact in base_decision["facts"]],
+            [
+                "FACT-DEMOA-REV-TTM",
+                "FACT-DEMOA-REV-TTM-PRIOR",
+                "FACT-DEMOA-OPINC-TTM",
+                "FACT-DEMOA-FCF-TTM",
+                "FACT-DEMOA-CASH",
+                "FACT-DEMOA-DEBT",
+                "FACT-DEMOA-SHARES",
+                "FACT-DEMOA-CLOSE",
+            ],
+        )
+        self.assertEqual(base_decision["facts"], reversed_decision["facts"])
+        self.assertEqual(base_packet["analysis_hash"], reversed_packet["analysis_hash"])
+        self.assertEqual(base_decision["calculations"], reversed_decision["calculations"])
+
 
 if __name__ == "__main__":
     unittest.main()
