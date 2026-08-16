@@ -109,10 +109,14 @@ def validate_symbol(value: Any, field: str = "symbol") -> str:
     return raw
 
 
-def _reject_unknown_fields(value: dict[str, Any], allowed: set[str], field: str) -> None:
+def reject_unknown_fields(value: dict[str, Any], allowed: set[str], field: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ContractError(f"{field} contains unsupported fields: {', '.join(unknown)}")
+
+
+def _reject_unknown_fields(value: dict[str, Any], allowed: set[str], field: str) -> None:
+    reject_unknown_fields(value, allowed, field)
 
 
 def ensure_unique(values: Iterable[str], field: str) -> None:

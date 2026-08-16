@@ -4,6 +4,7 @@ import copy
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 
@@ -210,6 +211,25 @@ class SnapshotContractTests(unittest.TestCase):
         self.assertEqual(snapshot.pit_quality, "FIXTURE")
         self.assertEqual(snapshot.data["market"], "US")
         self.assertIn("EV-FUTURE-001", snapshot.evidence_by_id)
+        decision_at = datetime.fromisoformat("2026-08-16T08:30:00-04:00")
+        demoa_revenue_facts = [
+            snapshot.financial_facts_by_id[fact_id]
+            for fact_id in snapshot.data["themes"][0]["candidates"][0]["financial_fact_refs"]
+            if snapshot.financial_facts_by_id[fact_id]["security_id"] == "US.DEMOA"
+            and snapshot.financial_facts_by_id[fact_id]["metric"] == "revenue_ttm"
+        ]
+        self.assertGreaterEqual(len(demoa_revenue_facts), 2)
+        self.assertEqual(
+            len({fact["period_end"] for fact in demoa_revenue_facts}),
+            len(demoa_revenue_facts),
+        )
+        self.assertTrue(
+            all(
+                datetime.fromisoformat(fact["available_at"]) <= decision_at
+                for fact in demoa_revenue_facts
+            )
+        )
+        self.assertTrue(all(fact["evidence_ref"] == "EV-SEC-001" for fact in demoa_revenue_facts))
 
     def test_snapshot_schema_matches_us_contract(self) -> None:
         schema = json.loads(
@@ -264,6 +284,68 @@ class SnapshotContractTests(unittest.TestCase):
         invalid["evidence"].append(copy.deepcopy(invalid["evidence"][0]))
         with self.assertRaisesRegex(ContractError, "must contain unique values"):
             validate_snapshot(invalid)
+
+    def test_unknown_fields_are_rejected_at_every_snapshot_layer(self) -> None:
+        scenarios = [
+            ("snapshot", lambda payload: payload.update({"unexpected_root": True})),
+            (
+                "snapshot.evidence\\[0\\]",
+                lambda payload: payload["evidence"][0].update({"unexpected_evidence": True}),
+            ),
+            (
+                "snapshot.financial_facts\\[0\\]",
+                lambda payload: payload["financial_facts"][0].update({"unexpected_fact": True}),
+            ),
+            (
+                "snapshot.market_context",
+                lambda payload: payload["market_context"].update(
+                    {"unexpected_market_context": True}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]",
+                lambda payload: payload["themes"][0].update({"unexpected_theme": True}),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.dimensions\\.materiality",
+                lambda payload: payload["themes"][0]["dimensions"]["materiality"].update(
+                    {"unexpected_dimension": True}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]",
+                lambda payload: payload["themes"][0]["candidates"][0].update(
+                    {"unexpected_candidate": True}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.bull_case",
+                lambda payload: payload["themes"][0]["candidates"][0]["bull_case"].update(
+                    {"unexpected_bull_case": True}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.bear_case",
+                lambda payload: payload["themes"][0]["candidates"][0]["bear_case"].update(
+                    {"unexpected_bear_case": True}
+                ),
+            ),
+            (
+                "snapshot.themes\\[0\\]\\.candidates\\[0\\]\\.risk_verdict",
+                lambda payload: payload["themes"][0]["candidates"][0]["risk_verdict"].update(
+                    {"unexpected_risk_verdict": True}
+                ),
+            ),
+        ]
+
+        for path_pattern, mutate in scenarios:
+            invalid = copy.deepcopy(self.demo)
+            mutate(invalid)
+            with (
+                self.subTest(path_pattern=path_pattern),
+                self.assertRaisesRegex(ContractError, path_pattern),
+            ):
+                validate_snapshot(invalid)
 
     def test_evidence_timelines_and_required_fields_are_enforced(self) -> None:
         invalid = copy.deepcopy(self.demo)

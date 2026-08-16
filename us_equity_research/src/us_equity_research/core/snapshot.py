@@ -25,6 +25,7 @@ from .contracts import (
     RunRequest,
     ensure_unique,
     parse_datetime,
+    reject_unknown_fields,
     require_list,
     require_mapping,
     require_string,
@@ -77,6 +78,24 @@ def load_snapshot(workspace: Path, request: RunRequest) -> ValidatedSnapshot:
 
 def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
     data = dict(require_mapping(raw, "snapshot"))
+    reject_unknown_fields(
+        data,
+        {
+            "schema_version",
+            "market",
+            "snapshot_id",
+            "data_mode",
+            "pit_quality",
+            "as_of",
+            "retrieved_at",
+            "fixture_notice",
+            "evidence",
+            "financial_facts",
+            "market_context",
+            "themes",
+        },
+        "snapshot",
+    )
     version = require_string(data.get("schema_version"), "snapshot.schema_version", strip=False)
     if version != SCHEMA_VERSION:
         raise ContractError(f"unsupported snapshot schema_version: {version}")
@@ -149,6 +168,24 @@ def _validate_evidence(
     evidence_by_id: dict[str, dict[str, Any]] = {}
     for index, raw_item in enumerate(items):
         evidence = dict(require_mapping(raw_item, f"snapshot.evidence[{index}]"))
+        reject_unknown_fields(
+            evidence,
+            {
+                "evidence_id",
+                "source_level",
+                "category",
+                "title",
+                "summary",
+                "source_url",
+                "source_document_id",
+                "published_at",
+                "effective_at",
+                "available_at",
+                "retrieved_at",
+                "as_of",
+            },
+            f"snapshot.evidence[{index}]",
+        )
         evidence_id = validate_identifier(
             evidence.get("evidence_id"), f"evidence[{index}].evidence_id"
         )
@@ -222,6 +259,20 @@ def _validate_financial_facts(
     facts_by_id: dict[str, dict[str, Any]] = {}
     for index, raw_item in enumerate(items):
         fact = dict(require_mapping(raw_item, f"snapshot.financial_facts[{index}]"))
+        reject_unknown_fields(
+            fact,
+            {
+                "fact_id",
+                "security_id",
+                "metric",
+                "value",
+                "unit",
+                "period_end",
+                "available_at",
+                "evidence_ref",
+            },
+            f"snapshot.financial_facts[{index}]",
+        )
         fact_id = validate_identifier(fact.get("fact_id"), f"financial_facts[{index}].fact_id")
         validate_identifier(
             fact.get("security_id"),
@@ -273,6 +324,18 @@ def _validate_financial_facts(
 
 def _validate_market_context(raw: Any, evidence_by_id: Mapping[str, dict[str, Any]]) -> None:
     context = require_mapping(raw, "snapshot.market_context")
+    reject_unknown_fields(
+        context,
+        {
+            "regime",
+            "breadth",
+            "rates",
+            "liquidity",
+            "calculation_note",
+            "evidence_refs",
+        },
+        "snapshot.market_context",
+    )
     require_string(context.get("regime"), "market_context.regime")
     require_string(context.get("breadth"), "market_context.breadth")
     require_string(context.get("rates"), "market_context.rates")
@@ -288,6 +351,22 @@ def _validate_theme(
     financial_facts_by_id: Mapping[str, dict[str, Any]],
 ) -> list[str]:
     prefix = f"snapshot.themes[{index}]"
+    reject_unknown_fields(
+        theme,
+        {
+            "theme_id",
+            "name",
+            "event_type",
+            "stage",
+            "dimensions",
+            "transmission_chain",
+            "next_catalyst_at",
+            "evidence_refs",
+            "data_gaps",
+            "candidates",
+        },
+        prefix,
+    )
     validate_identifier(theme.get("theme_id"), f"{prefix}.theme_id")
     require_string(theme.get("name"), f"{prefix}.name")
     require_string(theme.get("event_type"), f"{prefix}.event_type")
@@ -296,8 +375,14 @@ def _validate_theme(
         raise ContractError(f"{prefix}.stage must be one of {list(STAGES)}")
 
     dimensions = require_mapping(theme.get("dimensions"), f"{prefix}.dimensions")
+    reject_unknown_fields(dimensions, set(DIMENSIONS), f"{prefix}.dimensions")
     for key in DIMENSIONS:
         dimension = require_mapping(dimensions.get(key), f"{prefix}.dimensions.{key}")
+        reject_unknown_fields(
+            dimension,
+            {"assessment", "reason", "evidence_refs"},
+            f"{prefix}.dimensions.{key}",
+        )
         assessment = require_string(
             dimension.get("assessment"),
             f"{prefix}.dimensions.{key}.assessment",
@@ -332,6 +417,27 @@ def _validate_theme(
     for candidate_index, raw_candidate in enumerate(candidates):
         candidate = require_mapping(raw_candidate, f"{prefix}.candidates[{candidate_index}]")
         candidate_prefix = f"{prefix}.candidates[{candidate_index}]"
+        reject_unknown_fields(
+            candidate,
+            {
+                "security_id",
+                "symbol",
+                "name",
+                "role",
+                "thesis",
+                "bull_case",
+                "bear_case",
+                "risk_verdict",
+                "evidence_refs",
+                "market_evidence_refs",
+                "financial_fact_refs",
+                "invalidation_conditions",
+                "data_gaps",
+                "risk_flags",
+                "manual_review_items",
+            },
+            candidate_prefix,
+        )
         security_id = validate_identifier(
             candidate.get("security_id"),
             f"{candidate_prefix}.security_id",
@@ -393,6 +499,7 @@ def _validate_case(
     evidence_by_id: Mapping[str, dict[str, Any]],
 ) -> None:
     case = require_mapping(raw, field)
+    reject_unknown_fields(case, {"text", "evidence_refs"}, field)
     require_string(case.get("text"), f"{field}.text")
     _validate_refs(case.get("evidence_refs"), f"{field}.evidence_refs", evidence_by_id)
 
