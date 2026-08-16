@@ -245,13 +245,13 @@ function sanitizeFocus(value) {
             return [];
         }
         return [
-            {
+            omitUndefinedProperties({
                 symbol,
                 name,
                 theme: getString(record.theme, 'focus.theme'),
                 decision: getString(record.decision, 'focus.decision'),
                 reason: getString(record.reason, 'focus.reason')
-            }
+            })
         ];
     });
 }
@@ -260,11 +260,15 @@ function sanitizeCounts(value) {
         return undefined;
     }
     const counts = value;
-    return {
+    const sanitized = omitUndefinedProperties({
         observe: getInteger(counts.observe, 'counts.observe'),
         continue_research: getInteger(counts.continue_research, 'counts.continue_research'),
         exclude: getInteger(counts.exclude, 'counts.exclude')
-    };
+    });
+    return Object.keys(sanitized).length ? sanitized : undefined;
+}
+function omitUndefinedProperties(value) {
+    return Object.fromEntries(Object.entries(value).filter(([, entryValue])=>entryValue !== undefined));
 }
 function sanitizeRelativePath(value) {
     const relativePath = getString(value, 'relative_path');
@@ -386,7 +390,7 @@ export function sanitizeResearchRunResult(raw) {
     const decisionAt = getString(payload.decision_at, 'decision_at') || '';
     const snapshotId = getString(payload.snapshot_id, 'snapshot_id') || '';
     const analysisHash = getString(payload.analysis_hash, 'analysis_hash') || '';
-    return {
+    return omitUndefinedProperties({
         schema_version: schemaVersion,
         market: 'CN',
         run_id: runId,
@@ -406,7 +410,7 @@ export function sanitizeResearchRunResult(raw) {
         available_sections: getStringArray(payload.available_sections),
         manifest_hash: getString(payload.manifest_hash, 'manifest_hash'),
         reused: getBoolean(payload.reused, 'reused')
-    };
+    });
 }
 export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     const payload = ensurePlainObject(raw, 'artifact result');
@@ -426,7 +430,7 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     const content = getString(payload.content, 'content') || '';
     const marker = '\n…[truncated]';
     const cappedContent = content.length > maxChars ? `${content.slice(0, Math.max(0, maxChars - marker.length))}${marker}` : content;
-    return {
+    return omitUndefinedProperties({
         schema_version: getString(payload.schema_version, 'schema_version') || '0.1',
         market: 'CN',
         artifact_id: getString(payload.artifact_id, 'artifact_id') || '',
@@ -435,7 +439,7 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
         content: cappedContent,
         truncated: Boolean(getBoolean(payload.truncated, 'truncated') || content.length > maxChars),
         relative_path: sanitizeRelativePath(payload.relative_path)
-    };
+    });
 }
 function renderResearchRun(value) {
     if ('error' in value) {

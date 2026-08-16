@@ -13,6 +13,10 @@ import {
   sanitizeResearchRunResult,
 } from '../dist/index.js'
 
+function jsonRoundTrip(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
 async function makeTempProject() {
   const baseRoot = await mkdtemp(join(tmpdir(), 'a-share-research-'))
   const workspace = join(baseRoot, 'workspace')
@@ -426,4 +430,46 @@ test('sanitize helpers whitelist the new canonical CLI payloads', () => {
     () => sanitizeResearchRunResult({ schema_version: '0.1', market: 'US' }),
     /market handshake failed/,
   )
+})
+
+test('sanitize helpers omit absent optional fields and remain lossless JSON', () => {
+  const run = sanitizeResearchRunResult({
+    schema_version: '0.1',
+    market: 'CN',
+    run_id: 'cn-run-demo',
+    artifact_id: 'cn-artifact-demo',
+    status: 'completed',
+    writer_mode: 'engine',
+    data_mode: 'fixture',
+    pit_quality: 'FIXTURE',
+    workflow: 'daily_report',
+    decision_at: '2026-08-16T08:30:00+08:00',
+    snapshot_id: 'demo-snapshot-001',
+    analysis_hash: 'hash-demo',
+    counts: { observe: 2 },
+    focus: [{ symbol: '000001', name: '最小样例', decision: 'observe' }],
+  })
+  assert.ok(!('error' in run))
+  assert.deepEqual(run, jsonRoundTrip(run))
+  assert.deepEqual(run.counts, { observe: 2 })
+  assert.deepEqual(run.focus, [{ symbol: '000001', name: '最小样例', decision: 'observe' }])
+  assert.equal('continue_research' in run.counts, false)
+  assert.equal('exclude' in run.counts, false)
+  assert.equal('theme' in run.focus[0], false)
+  assert.equal('reason' in run.focus[0], false)
+  assert.equal('reused' in run, false)
+  assert.equal('warnings' in run, false)
+
+  const artifact = sanitizeArtifactReadResult({
+    schema_version: '0.1',
+    market: 'CN',
+    artifact_id: 'cn-artifact-demo',
+    section: 'summary',
+    content_type: 'application/json',
+    content: '{"ok":true}',
+    truncated: false,
+  }, 1000)
+  assert.ok(!('error' in artifact))
+  assert.deepEqual(artifact, jsonRoundTrip(artifact))
+  assert.equal('relative_path' in artifact, false)
 })
