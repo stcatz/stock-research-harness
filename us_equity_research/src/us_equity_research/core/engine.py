@@ -60,7 +60,7 @@ def build_research_packet(
         "snapshot_hash": snapshot.snapshot_hash,
         "data_mode": snapshot.data_mode,
         "pit_quality": snapshot.pit_quality,
-        "market_context": deepcopy(snapshot.data["market_context"]),
+        "market_context": _canonicalize_market_context(snapshot.data["market_context"]),
     }
     if request.subject is not None:
         packet["subject"] = request.subject
@@ -131,19 +131,21 @@ def build_research_packet(
 
 def _select_themes(themes: list[dict[str, Any]], request: RunRequest) -> list[dict[str, Any]]:
     if request.workflow == "daily_report":
-        return list(themes)
-    if request.workflow == "theme_research":
+        selected = list(themes)
+    elif request.workflow == "theme_research":
         query = (request.subject or "").casefold()
-        return [
+        selected = [
             theme
             for theme in themes
             if query in theme["theme_id"].casefold() or query in theme["name"].casefold()
         ]
-    return [
-        theme
-        for theme in themes
-        if any(candidate["symbol"] == request.symbol for candidate in theme["candidates"])
-    ]
+    else:
+        selected = [
+            theme
+            for theme in themes
+            if any(candidate["symbol"] == request.symbol for candidate in theme["candidates"])
+        ]
+    return sorted(selected, key=_theme_order_key)
 
 
 def _evaluate_candidate(
@@ -166,6 +168,9 @@ def _evaluate_candidate(
         else:
             time_leak_evidence_refs.append(evidence_ref)
 
+    usable_evidence_refs = sorted(usable_evidence_refs)
+    time_leak_evidence_refs = sorted(time_leak_evidence_refs)
+
     usable_candidate_specific = [
         snapshot.evidence_by_id[evidence_ref]
         for evidence_ref in candidate_specific_evidence
@@ -184,7 +189,7 @@ def _evaluate_candidate(
     ]
     structured_market = [
         snapshot.evidence_by_id[evidence_ref]
-        for evidence_ref in candidate.get("market_evidence_refs", [])
+        for evidence_ref in _sorted_unique_strings(candidate.get("market_evidence_refs", []))
         if evidence_ref in usable_evidence_refs
     ]
 
@@ -256,9 +261,9 @@ def _evaluate_candidate(
         "decision": decision,
         "decision_label": DECISION_LABELS[decision],
         "thesis": candidate["thesis"],
-        "bull_case": deepcopy(candidate["bull_case"]),
-        "bear_case": deepcopy(candidate["bear_case"]),
-        "risk_verdict": deepcopy(candidate["risk_verdict"]),
+        "bull_case": _canonicalize_case(candidate["bull_case"]),
+        "bear_case": _canonicalize_case(candidate["bear_case"]),
+        "risk_verdict": _canonicalize_case(candidate["risk_verdict"]),
         "transmission_chain": list(theme["transmission_chain"]),
         "next_catalyst_at": theme["next_catalyst_at"],
         "invalidation_conditions": invalidation_conditions,
@@ -285,7 +290,7 @@ def _collect_candidate_evidence_refs(candidate: Mapping[str, Any]) -> list[str]:
         *candidate["bear_case"].get("evidence_refs", []),
         *candidate["risk_verdict"].get("evidence_refs", []),
     ]
-    return _unique_strings(refs)
+    return _sorted_unique_strings(refs)
 
 
 def _has_three_viewpoints(
@@ -357,12 +362,12 @@ def _theme_summary(
         "theme_name": theme["name"],
         "event_type": theme["event_type"],
         "stage": theme["stage"],
-        "dimensions": deepcopy(theme["dimensions"]),
+        "dimensions": _canonicalize_dimensions(theme["dimensions"]),
         "transmission_chain": list(theme["transmission_chain"]),
         "next_catalyst_at": theme["next_catalyst_at"],
-        "evidence_refs": list(theme.get("evidence_refs", [])),
+        "evidence_refs": _sorted_unique_strings(theme.get("evidence_refs", [])),
         "data_gaps": list(theme.get("data_gaps", [])),
-        "candidate_ids": [item["security_id"] for item in decisions],
+        "candidate_ids": sorted(item["security_id"] for item in decisions),
         "candidate_counts": candidate_counts,
     }
 
@@ -455,6 +460,39 @@ def _unique_strings(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _sorted_unique_strings(values: list[str]) -> list[str]:
+    return sorted(_unique_strings(list(values)))
+
+
+def _canonicalize_case(case: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "text": case["text"],
+        "evidence_refs": _sorted_unique_strings(case.get("evidence_refs", [])),
+    }
+
+
+def _canonicalize_dimensions(dimensions: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: {
+            "assessment": value["assessment"],
+            "reason": value["reason"],
+            "evidence_refs": _sorted_unique_strings(value.get("evidence_refs", [])),
+        }
+        for key, value in dimensions.items()
+    }
+
+
+def _canonicalize_market_context(market_context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        **deepcopy(market_context),
+        "evidence_refs": _sorted_unique_strings(market_context.get("evidence_refs", [])),
+    }
+
+
+def _theme_order_key(theme: Mapping[str, Any]) -> tuple[str, str]:
+    return (theme["theme_id"], theme["name"])
 
 
 def _sha256_value(payload: Mapping[str, Any]) -> str:

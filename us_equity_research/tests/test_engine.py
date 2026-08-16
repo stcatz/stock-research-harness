@@ -30,6 +30,45 @@ def _request(workflow: str, **extra: object) -> RunRequest:
     return RunRequest.from_dict(payload)
 
 
+def _append_second_theme(raw: dict[str, object]) -> None:
+    second_theme = copy.deepcopy(raw["themes"][0])  # type: ignore[index]
+    second_theme["theme_id"] = "theme-us-automation-services"
+    second_theme["name"] = "Synthetic automation service follow-through"
+    second_theme["event_type"] = "service_follow_through"
+    second_theme["evidence_refs"] = [
+        "EV-MARKET-001",
+        "EV-MACRO-001",
+        "EV-INDUSTRY-001",
+        "EV-SECONDARY-001",
+    ]
+    second_theme["candidates"] = [copy.deepcopy(raw["themes"][0]["candidates"][1])]  # type: ignore[index]
+    second_theme["candidates"][0]["security_id"] = "US.DEMOD"  # type: ignore[index]
+    second_theme["candidates"][0]["symbol"] = "DEMOD"  # type: ignore[index]
+    second_theme["candidates"][0]["name"] = "Demo Service Follow-through D"  # type: ignore[index]
+    second_theme["candidates"][0]["thesis"] = (  # type: ignore[index]
+        "Synthetic service follow-through remains informational only until official issuer evidence improves."
+    )
+    raw["themes"].append(second_theme)  # type: ignore[index]
+
+
+def _reverse_equivalent_order_lists(raw: dict[str, object]) -> None:
+    raw["themes"].reverse()  # type: ignore[index]
+    raw["evidence"].reverse()  # type: ignore[index]
+    raw["market_context"]["evidence_refs"].reverse()  # type: ignore[index]
+    for theme in raw["themes"]:  # type: ignore[index]
+        theme["evidence_refs"].reverse()
+        theme["candidates"].reverse()
+        for dimension in theme["dimensions"].values():
+            dimension["evidence_refs"].reverse()
+        for candidate in theme["candidates"]:
+            candidate["evidence_refs"].reverse()
+            candidate["market_evidence_refs"].reverse()
+            candidate["financial_fact_refs"].reverse()
+            candidate["bull_case"]["evidence_refs"].reverse()
+            candidate["bear_case"]["evidence_refs"].reverse()
+            candidate["risk_verdict"]["evidence_refs"].reverse()
+
+
 class EngineTests(unittest.TestCase):
     def test_daily_report_packet_is_canonical_and_stable(self) -> None:
         snapshot = validate_snapshot(_load_demo_snapshot())
@@ -419,6 +458,38 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(base_decision["facts"], reversed_decision["facts"])
         self.assertEqual(base_packet["analysis_hash"], reversed_packet["analysis_hash"])
         self.assertEqual(base_decision["calculations"], reversed_decision["calculations"])
+
+    def test_packet_is_stable_under_equivalent_theme_candidate_and_ref_reordering(self) -> None:
+        base_raw = copy.deepcopy(_load_demo_snapshot())
+        _append_second_theme(base_raw)
+        reordered_raw = copy.deepcopy(base_raw)
+        _reverse_equivalent_order_lists(reordered_raw)
+
+        base_snapshot = validate_snapshot(base_raw)
+        reordered_snapshot = validate_snapshot(reordered_raw)
+        base_packet = build_research_packet(
+            base_snapshot,
+            _request("daily_report"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+        reordered_packet = build_research_packet(
+            reordered_snapshot,
+            _request("daily_report"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+
+        self.assertEqual(base_packet["themes"], reordered_packet["themes"])
+        self.assertEqual(base_packet["all_decisions"], reordered_packet["all_decisions"])
+        self.assertEqual(base_packet["analysis_hash"], reordered_packet["analysis_hash"])
+        self.assertEqual(
+            [theme["theme_id"] for theme in base_packet["themes"]],
+            ["theme-us-automation-platforms", "theme-us-automation-services"],
+        )
+        self.assertEqual(
+            base_packet["themes"][0]["candidate_ids"],
+            ["US.DEMOA", "US.DEMOB", "US.DEMOC"],
+        )
+        self.assertEqual(base_packet["themes"][1]["candidate_ids"], ["US.DEMOD"])
 
 
 if __name__ == "__main__":
