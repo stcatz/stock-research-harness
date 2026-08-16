@@ -16,7 +16,8 @@
 - `cn_research_run`
   - `workflow`: `daily_report | stock_research | theme_research`
   - `decision_at`: 带时区 ISO-8601 时间
-  - `snapshot`: `{ selector: demo | latest | id, id?: string }`
+  - `snapshot`: `{ selector: demo | latest | id, snapshot_id?: string }`
+    - `snapshot_id` 只能与 `selector: id` 同时使用，且此时必填。
   - `subject?`, `symbol?`, `top_n?`
 - `cn_artifact_read`
   - `artifact_id`

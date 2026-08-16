@@ -48,7 +48,10 @@ uv run a-share-research init
 uv run a-share-research doctor
 ```
 
-通过 stdin 运行研究：
+通过 stdin 运行研究。`daily_report`、`theme_research` 和 `stock_research` 是 `run`
+请求中的 `workflow` 值，不是独立子命令。
+
+使用合成 fixture 生成日报：
 
 ```bash
 printf '%s' '{
@@ -60,13 +63,53 @@ printf '%s' '{
 }' | uv run a-share-research run --request-json -
 ```
 
+使用最新真实快照生成日报：
+
+```bash
+printf '%s' '{
+  "schema_version": "0.1",
+  "workflow": "daily_report",
+  "decision_at": "2026-08-16T08:30:00+08:00",
+  "snapshot": {"selector": "latest"},
+  "top_n": 5
+}' | uv run a-share-research run --request-json -
+```
+
+研究特定题材：
+
+```bash
+printf '%s' '{
+  "schema_version": "0.1",
+  "workflow": "theme_research",
+  "decision_at": "2026-08-16T08:30:00+08:00",
+  "subject": "算力",
+  "snapshot": {"selector": "id", "snapshot_id": "cn-example-20260816"},
+  "top_n": 5
+}' | uv run a-share-research run --request-json -
+```
+
+研究特定标的：
+
+```bash
+printf '%s' '{
+  "schema_version": "0.1",
+  "workflow": "stock_research",
+  "decision_at": "2026-08-16T08:30:00+08:00",
+  "symbol": "600000.SH",
+  "snapshot": {"selector": "latest"},
+  "top_n": 5
+}' | uv run a-share-research run --request-json -
+```
+
 真实 snapshot 必须符合 `schemas/snapshot.schema.json`，并放在：
 
 ```text
 <workspace>/data/normalized/<snapshot_id>/snapshot.json
 ```
 
-然后使用 `snapshot.selector=latest` 或 `snapshot.selector=id`。今天补抓的旧数据必须标记为 `RECONSTRUCTED_NON_PIT`，不能伪装成严格历史快照。
+然后使用 `snapshot.selector=latest` 或 `snapshot.selector=id`。选择 `id` 时必须同时提供
+`snapshot.snapshot_id`，其他 selector 不允许携带该字段。今天补抓的旧数据必须标记为
+`RECONSTRUCTED_NON_PIT`，不能伪装成严格历史快照。
 
 读取 artifact：
 
