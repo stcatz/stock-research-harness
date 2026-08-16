@@ -14,6 +14,8 @@ materials/
 reports/
 journal/
 research/
+/artifacts/
+/prompts/
 a_share_research/data/
 a_share_research/materials/**
 a_share_research/artifacts/**
@@ -32,3 +34,4 @@ us_equity_research/reports/
 **/*_junk/
 **/*_old/
 **/_legacy_copy_from_init/
+.deploy-backups/
