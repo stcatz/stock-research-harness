@@ -172,8 +172,8 @@ class RunRequest:
         if version != SCHEMA_VERSION:
             raise ContractError(f"unsupported schema_version: {version}")
 
-        market = data.get("market")
-        if market is not None and market != MARKET:
+        market = require_string(data.get("market"), "market", strip=False)
+        if market != MARKET:
             raise ContractError("this engine is permanently bound to market US")
 
         workflow = require_string(data.get("workflow"), "workflow", strip=False)

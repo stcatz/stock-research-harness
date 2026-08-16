@@ -22,6 +22,7 @@ def _load_demo_snapshot() -> dict[str, object]:
 def _request(workflow: str, **extra: object) -> RunRequest:
     payload: dict[str, object] = {
         "schema_version": "0.1",
+        "market": "US",
         "workflow": workflow,
         "decision_at": DECISION_AT,
         "snapshot": {"selector": "demo"},

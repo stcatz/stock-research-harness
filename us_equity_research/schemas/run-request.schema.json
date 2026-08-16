@@ -4,7 +4,7 @@
   "title": "US equity research run request",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "workflow", "decision_at", "snapshot"],
+  "required": ["schema_version", "market", "workflow", "decision_at", "snapshot"],
   "properties": {
     "schema_version": { "const": "0.1" },
     "market": { "const": "US" },

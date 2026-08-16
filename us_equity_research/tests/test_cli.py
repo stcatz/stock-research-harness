@@ -21,12 +21,14 @@ class CliTests(unittest.TestCase):
         requests = [
             {
                 "schema_version": "0.1",
+                "market": "US",
                 "workflow": "daily_report",
                 "decision_at": "2026-08-16T08:30:00-04:00",
                 "snapshot": {"selector": "demo"},
             },
             {
                 "schema_version": "0.1",
+                "market": "US",
                 "workflow": "theme_research",
                 "decision_at": "2026-08-16T08:30:00-04:00",
                 "snapshot": {"selector": "demo"},
@@ -34,6 +36,7 @@ class CliTests(unittest.TestCase):
             },
             {
                 "schema_version": "0.1",
+                "market": "US",
                 "workflow": "stock_research",
                 "decision_at": "2026-08-16T08:30:00-04:00",
                 "snapshot": {"selector": "demo"},

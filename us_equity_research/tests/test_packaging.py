@@ -75,6 +75,7 @@ from us_equity_research.core.snapshot import load_snapshot
 request = RunRequest.from_dict(
     {
         "schema_version": "0.1",
+        "market": "US",
         "workflow": "daily_report",
         "decision_at": "2026-08-16T08:30:00-04:00",
         "snapshot": {"selector": "demo"},

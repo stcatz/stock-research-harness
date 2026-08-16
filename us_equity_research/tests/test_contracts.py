@@ -18,6 +18,28 @@ from us_equity_research.core.snapshot import (
 
 
 class RunRequestTests(unittest.TestCase):
+    def test_market_is_required_and_fixed_to_us(self) -> None:
+        with self.assertRaisesRegex(ContractError, "market must be a string"):
+            RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T08:30:00-04:00",
+                    "snapshot": {"selector": "demo"},
+                }
+            )
+
+        with self.assertRaisesRegex(ContractError, "permanently bound"):
+            RunRequest.from_dict(
+                {
+                    "schema_version": "0.1",
+                    "market": "CN",
+                    "workflow": "daily_report",
+                    "decision_at": "2026-08-16T08:30:00-04:00",
+                    "snapshot": {"selector": "demo"},
+                }
+            )
+
     def test_market_is_fixed_to_us(self) -> None:
         with self.assertRaisesRegex(ContractError, "permanently bound"):
             RunRequest.from_dict(
@@ -35,6 +57,7 @@ class RunRequestTests(unittest.TestCase):
             RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T08:30:00",
                     "snapshot": {"selector": "demo"},
@@ -44,6 +67,7 @@ class RunRequestTests(unittest.TestCase):
     def test_daily_report_workflow_contract(self) -> None:
         base = {
             "schema_version": "0.1",
+            "market": "US",
             "workflow": "daily_report",
             "decision_at": "2026-08-16T08:30:00-04:00",
             "snapshot": {"selector": "latest"},
@@ -59,6 +83,7 @@ class RunRequestTests(unittest.TestCase):
     def test_theme_research_workflow_contract(self) -> None:
         base = {
             "schema_version": "0.1",
+            "market": "US",
             "workflow": "theme_research",
             "decision_at": "2026-08-16T08:30:00-04:00",
             "snapshot": {"selector": "demo"},
@@ -75,6 +100,7 @@ class RunRequestTests(unittest.TestCase):
     def test_stock_research_workflow_contract(self) -> None:
         base = {
             "schema_version": "0.1",
+            "market": "US",
             "workflow": "stock_research",
             "decision_at": "2026-08-16T08:30:00-04:00",
             "snapshot": {"selector": "id", "snapshot_id": "us-example-20260816"},
@@ -91,6 +117,7 @@ class RunRequestTests(unittest.TestCase):
     def test_snapshot_selector_rules_and_unknown_fields(self) -> None:
         base = {
             "schema_version": "0.1",
+            "market": "US",
             "workflow": "daily_report",
             "decision_at": "2026-08-16T08:30:00-04:00",
         }
@@ -125,6 +152,7 @@ class RunRequestTests(unittest.TestCase):
     def test_top_n_and_symbol_validation_are_strict(self) -> None:
         base = {
             "schema_version": "0.1",
+            "market": "US",
             "workflow": "stock_research",
             "decision_at": "2026-08-16T08:30:00-04:00",
             "snapshot": {"selector": "demo"},
@@ -153,6 +181,10 @@ class RunRequestTests(unittest.TestCase):
 
         self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")
         self.assertEqual(schema["properties"]["market"]["const"], "US")
+        self.assertEqual(
+            schema["required"],
+            ["schema_version", "market", "workflow", "decision_at", "snapshot"],
+        )
         self.assertEqual(
             schema["properties"]["symbol"]["pattern"],
             "^[A-Z][A-Z0-9.-]{0,14}$",
@@ -195,11 +227,51 @@ class ArtifactReadRequestTests(unittest.TestCase):
         )
 
         self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["required"],
+            [
+                "schema_version",
+                "market",
+                "artifact_id",
+                "section",
+                "content_type",
+                "content",
+                "truncated",
+                "relative_path",
+            ],
+        )
+        self.assertEqual(
+            set(schema["properties"]),
+            {
+                "schema_version",
+                "market",
+                "artifact_id",
+                "section",
+                "content_type",
+                "content",
+                "truncated",
+                "relative_path",
+            },
+        )
         self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")
         self.assertEqual(schema["properties"]["market"]["const"], "US")
         self.assertEqual(
             schema["properties"]["artifact_id"]["pattern"],
             "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
+        )
+        self.assertEqual(
+            schema["properties"]["section"]["enum"],
+            ["summary", "report", "manifest", "packet"],
+        )
+        self.assertEqual(
+            schema["properties"]["content_type"]["enum"],
+            ["application/json", "text/markdown"],
+        )
+        self.assertEqual(schema["properties"]["content"]["type"], "string")
+        self.assertEqual(schema["properties"]["truncated"]["type"], "boolean")
+        self.assertEqual(
+            schema["properties"]["relative_path"]["pattern"],
+            "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+",
         )
 
 
@@ -491,6 +563,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "latest"},
@@ -547,6 +620,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "latest"},
@@ -571,6 +645,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "id", "snapshot_id": self.demo["snapshot_id"]},
@@ -593,6 +668,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
@@ -618,6 +694,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
@@ -641,6 +718,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "id", "snapshot_id": snapshot_id},
@@ -664,6 +742,7 @@ class SnapshotContractTests(unittest.TestCase):
             request = RunRequest.from_dict(
                 {
                     "schema_version": "0.1",
+                    "market": "US",
                     "workflow": "daily_report",
                     "decision_at": "2026-08-16T12:00:00-04:00",
                     "snapshot": {"selector": "latest"},
