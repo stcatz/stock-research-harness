@@ -84,10 +84,12 @@ export function resolvePythonBin(projectRoot) {
     if (configured) {
         return configured;
     }
-    if (process.platform === 'win32') {
-        return join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    }
     return join(projectRoot, '.venv', 'bin', 'python');
+}
+export function assertSupportedPlatform(platform = process.platform) {
+    if (platform !== 'darwin' && platform !== 'linux') {
+        throw new Error('us_equity_research adapter supports only macOS and Linux');
+    }
 }
 function ensurePlainObject(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -404,7 +406,7 @@ function childEnvironment() {
     return env;
 }
 function terminateProcessTree(child, signal) {
-    if (child.pid && process.platform !== 'win32') {
+    if (child.pid) {
         try {
             process.kill(-child.pid, signal);
             return;
@@ -417,11 +419,9 @@ function terminateProcessTree(child, signal) {
             return;
         }
     }
-    try {
-        child.kill(signal);
-    } catch  {}
 }
 async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
+    assertSupportedPlatform(options.platform ?? process.platform);
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
         throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}`);
@@ -429,6 +429,7 @@ async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
     if (options.signal?.aborted) {
         throw new BridgeAbortError();
     }
+    const processTreeTerminator = options.processTreeTerminator ?? terminateProcessTree;
     const child = spawn(pythonBin, argv, {
         cwd: projectRoot,
         env: childEnvironment(),
@@ -437,11 +438,11 @@ async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
             'pipe',
             'pipe'
         ],
-        detached: process.platform !== 'win32',
+        detached: true,
         windowsHide: true
     });
     if (!child.stdout || !child.stderr || !child.stdin) {
-        terminateProcessTree(child, 'SIGKILL');
+        processTreeTerminator(child, 'SIGKILL');
         throw new Error('US research CLI process did not expose standard streams');
     }
     let stdout = '';
@@ -449,22 +450,27 @@ async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
     let outputBytes = 0;
     let terminationReason;
     let forceTimer;
+    let childClosed = false;
+    const clearForceTimer = ()=>{
+        if (forceTimer) {
+            clearTimeout(forceTimer);
+            forceTimer = undefined;
+        }
+    };
     const requestTermination = (reason)=>{
-        if (terminationReason) {
+        if (terminationReason || childClosed) {
             return;
         }
         terminationReason = reason;
-        terminateProcessTree(child, 'SIGTERM');
-        forceTimer = setTimeout(()=>terminateProcessTree(child, 'SIGKILL'), TERMINATION_GRACE_MS);
+        processTreeTerminator(child, 'SIGTERM');
+        forceTimer = setTimeout(()=>{
+            forceTimer = undefined;
+            if (!childClosed) {
+                processTreeTerminator(child, 'SIGKILL');
+            }
+        }, TERMINATION_GRACE_MS);
         forceTimer.unref();
     };
-    const onAbort = ()=>requestTermination('abort');
-    options.signal?.addEventListener('abort', onAbort, {
-        once: true
-    });
-    if (options.signal?.aborted) {
-        onAbort();
-    }
     const append = (target, chunk)=>{
         const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
         outputBytes += Buffer.byteLength(text);
@@ -478,12 +484,23 @@ async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
     child.stdout.on('data', (chunk)=>append('stdout', chunk));
     child.stderr.on('data', (chunk)=>append('stderr', chunk));
     child.stdin.on('error', ()=>{});
-    const timeout = setTimeout(()=>requestTermination('timeout'), timeoutMs);
-    timeout.unref();
     const closed = new Promise((resolvePromise, rejectPromise)=>{
         child.once('error', rejectPromise);
-        child.once('close', resolvePromise);
+        child.once('close', (exitCode)=>{
+            childClosed = true;
+            clearForceTimer();
+            resolvePromise(exitCode);
+        });
     });
+    const onAbort = ()=>requestTermination('abort');
+    options.signal?.addEventListener('abort', onAbort, {
+        once: true
+    });
+    if (options.signal?.aborted) {
+        onAbort();
+    }
+    const timeout = setTimeout(()=>requestTermination('timeout'), timeoutMs);
+    timeout.unref();
     child.stdin.end(`${JSON.stringify(request)}\n`);
     let exitCode;
     try {
@@ -491,8 +508,9 @@ async function spawnBounded(pythonBin, argv, request, projectRoot, options) {
     } catch (error) {
         throw new Error(`US research CLI could not start: ${redactSensitiveText(String(error.message), true)}`);
     } finally{
+        childClosed = true;
         clearTimeout(timeout);
-        if (forceTimer && !terminationReason) clearTimeout(forceTimer);
+        clearForceTimer();
         options.signal?.removeEventListener('abort', onAbort);
     }
     if (terminationReason === 'abort') throw new BridgeAbortError();

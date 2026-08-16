@@ -47,7 +47,7 @@ These are used only to resolve the bridge command. They are not copied into the 
 
 ## Build and test
 
-Node 22 or newer is required.
+Node 22 or newer on macOS or Linux is required. The adapter rejects other operating systems before spawning Python because cancellation and timeout safety depend on Unix process-group semantics.
 
 ```bash
 npm ci

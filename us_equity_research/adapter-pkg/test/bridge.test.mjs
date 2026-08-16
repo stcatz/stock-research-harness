@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   apply,
+  assertSupportedPlatform,
   callResearchCli,
   readArtifact,
   runResearchWorkflow,
@@ -31,10 +32,7 @@ async function writeFakePython(projectRoot, { delayMs = 0, grandchildPidFile } =
     ? `
 const { spawn } = await import('node:child_process');
 const { writeFileSync } = await import('node:fs');
-const grandchild = spawn(process.execPath, [
-  '-e',
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
-], {
+const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
   stdio: 'ignore'
 });
 writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid));
@@ -174,6 +172,21 @@ test('bundle declares only the official Cordis and dsh-tools dependencies', asyn
   assert.equal(manifest.devDependencies['@deepseek-ai/dsh-tools'], '0.1.0-rc.6')
   assert.equal(manifest.dependencies?.['@deepseek-ai/dsh'], undefined)
   assert.equal(manifest.devDependencies?.['@deepseek-ai/dsh'], undefined)
+  assert.deepEqual(manifest.os, ['darwin', 'linux'])
+})
+
+test('platform guard rejects non-Unix runtimes before spawning Python', async () => {
+  assert.doesNotThrow(() => assertSupportedPlatform('darwin'))
+  assert.doesNotThrow(() => assertSupportedPlatform('linux'))
+  assert.throws(() => assertSupportedPlatform('win32'), /supports only macOS and Linux/)
+
+  await assert.rejects(callResearchCli('run', {
+    schema_version: '0.1', market: 'US', workflow: 'daily_report',
+    decision_at: '2026-08-16T08:30:00-04:00', snapshot: { selector: 'demo' }, top_n: 5,
+  }, {
+    projectRoot: '/path-that-must-never-be-spawned',
+    platform: 'win32',
+  }), /supports only macOS and Linux/)
 })
 
 test('source statically defines exactly two model-facing tools', async () => {
@@ -398,6 +411,26 @@ test('bridge timeout terminates the child and reports an infrastructure timeout'
     schema_version: '0.1', market: 'US', workflow: 'daily_report',
     decision_at: '2026-08-16T08:30:00-04:00', snapshot: { selector: 'demo' }, top_n: 5,
   }, { projectRoot, timeoutMs: 50 }), /timed out/)
+})
+
+test('graceful SIGTERM close cancels the force timer without a delayed SIGKILL', async () => {
+  const { projectRoot } = await makeTempProject()
+  await writeFakePython(projectRoot, { delayMs: 5000 })
+  const terminationSignals = []
+  await assert.rejects(callResearchCli('run', {
+    schema_version: '0.1', market: 'US', workflow: 'daily_report',
+    decision_at: '2026-08-16T08:30:00-04:00', snapshot: { selector: 'demo' }, top_n: 5,
+  }, {
+    projectRoot,
+    timeoutMs: 50,
+    processTreeTerminator(child, signal) {
+      terminationSignals.push(signal)
+      child.kill(signal)
+    },
+  }), /timed out/)
+
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  assert.deepEqual(terminationSignals, ['SIGTERM'])
 })
 
 test('partial and UNKNOWN with gaps are successful domain results', () => {

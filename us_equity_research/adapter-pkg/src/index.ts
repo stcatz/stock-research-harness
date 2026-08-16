@@ -42,7 +42,14 @@ type CliBridgeOptions = {
   pythonBin?: string
   signal?: AbortSignal
   timeoutMs?: number
+  platform?: NodeJS.Platform
+  processTreeTerminator?: ProcessTreeTerminator
 }
+
+type ProcessTreeTerminator = (
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+) => void
 
 type RunSuccessResult = {
   schema_version: '0.1'
@@ -163,10 +170,13 @@ export function resolvePythonBin(projectRoot: string): string {
   if (configured) {
     return configured
   }
-  if (process.platform === 'win32') {
-    return join(projectRoot, '.venv', 'Scripts', 'python.exe')
-  }
   return join(projectRoot, '.venv', 'bin', 'python')
+}
+
+export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
+  if (platform !== 'darwin' && platform !== 'linux') {
+    throw new Error('us_equity_research adapter supports only macOS and Linux')
+  }
 }
 
 function ensurePlainObject(value: unknown, label: string): JsonObject {
@@ -505,7 +515,7 @@ function childEnvironment(): NodeJS.ProcessEnv {
 }
 
 function terminateProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
-  if (child.pid && process.platform !== 'win32') {
+  if (child.pid) {
     try {
       process.kill(-child.pid, signal)
       return
@@ -519,11 +529,6 @@ function terminateProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Si
       }
       return
     }
-  }
-  try {
-    child.kill(signal)
-  } catch {
-    // The child may already have exited.
   }
 }
 
@@ -540,6 +545,7 @@ async function spawnBounded(
   projectRoot: string,
   options: CliBridgeOptions,
 ): Promise<CollectedProcess> {
+  assertSupportedPlatform(options.platform ?? process.platform)
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
     throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}`)
@@ -548,15 +554,16 @@ async function spawnBounded(
     throw new BridgeAbortError()
   }
 
+  const processTreeTerminator = options.processTreeTerminator ?? terminateProcessTree
   const child = spawn(pythonBin, argv, {
     cwd: projectRoot,
     env: childEnvironment(),
     stdio: ['pipe', 'pipe', 'pipe'],
-    detached: process.platform !== 'win32',
+    detached: true,
     windowsHide: true,
   })
   if (!child.stdout || !child.stderr || !child.stdin) {
-    terminateProcessTree(child, 'SIGKILL')
+    processTreeTerminator(child, 'SIGKILL')
     throw new Error('US research CLI process did not expose standard streams')
   }
 
@@ -565,20 +572,28 @@ async function spawnBounded(
   let outputBytes = 0
   let terminationReason: 'abort' | 'timeout' | 'output' | undefined
   let forceTimer: NodeJS.Timeout | undefined
+  let childClosed = false
+
+  const clearForceTimer = (): void => {
+    if (forceTimer) {
+      clearTimeout(forceTimer)
+      forceTimer = undefined
+    }
+  }
 
   const requestTermination = (reason: typeof terminationReason): void => {
-    if (terminationReason) {
+    if (terminationReason || childClosed) {
       return
     }
     terminationReason = reason
-    terminateProcessTree(child, 'SIGTERM')
-    forceTimer = setTimeout(() => terminateProcessTree(child, 'SIGKILL'), TERMINATION_GRACE_MS)
+    processTreeTerminator(child, 'SIGTERM')
+    forceTimer = setTimeout(() => {
+      forceTimer = undefined
+      if (!childClosed) {
+        processTreeTerminator(child, 'SIGKILL')
+      }
+    }, TERMINATION_GRACE_MS)
     forceTimer.unref()
-  }
-  const onAbort = (): void => requestTermination('abort')
-  options.signal?.addEventListener('abort', onAbort, { once: true })
-  if (options.signal?.aborted) {
-    onAbort()
   }
 
   const append = (target: 'stdout' | 'stderr', chunk: Buffer | string): void => {
@@ -597,12 +612,21 @@ async function spawnBounded(
     // Close/error handling below reports the canonical process outcome.
   })
 
-  const timeout = setTimeout(() => requestTermination('timeout'), timeoutMs)
-  timeout.unref()
   const closed = new Promise<number | null>((resolvePromise, rejectPromise) => {
     child.once('error', rejectPromise)
-    child.once('close', resolvePromise)
+    child.once('close', (exitCode) => {
+      childClosed = true
+      clearForceTimer()
+      resolvePromise(exitCode)
+    })
   })
+  const onAbort = (): void => requestTermination('abort')
+  options.signal?.addEventListener('abort', onAbort, { once: true })
+  if (options.signal?.aborted) {
+    onAbort()
+  }
+  const timeout = setTimeout(() => requestTermination('timeout'), timeoutMs)
+  timeout.unref()
   child.stdin.end(`${JSON.stringify(request)}\n`)
 
   let exitCode: number | null
@@ -611,8 +635,9 @@ async function spawnBounded(
   } catch (error) {
     throw new Error(`US research CLI could not start: ${redactSensitiveText(String((error as Error).message), true)}`)
   } finally {
+    childClosed = true
     clearTimeout(timeout)
-    if (forceTimer && !terminationReason) clearTimeout(forceTimer)
+    clearForceTimer()
     options.signal?.removeEventListener('abort', onAbort)
   }
 
