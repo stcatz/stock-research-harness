@@ -3,14 +3,14 @@
   "$id": "https://example.invalid/us-equity-research/artifact-result.schema.json",
   "title": "US equity research artifact result",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": ["schema_version", "market", "artifact_id", "status"],
   "properties": {
     "schema_version": { "const": "0.1" },
     "market": { "const": "US" },
     "artifact_id": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9._-]{1,128}$",
+      "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
       "maxLength": 128
     },
     "status": { "enum": ["completed", "not_implemented"] },

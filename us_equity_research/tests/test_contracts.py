@@ -184,11 +184,12 @@ class ArtifactReadRequestTests(unittest.TestCase):
             .read_text(encoding="utf-8")
         )
 
+        self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")
         self.assertEqual(schema["properties"]["market"]["const"], "US")
         self.assertEqual(
             schema["properties"]["artifact_id"]["pattern"],
-            "^[A-Za-z0-9._-]{1,128}$",
+            "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
         )
 
 
