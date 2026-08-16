@@ -43,9 +43,8 @@ def build_calculation_bundle(
         else:
             cutoff_excluded_fact_ids.append(fact_id)
 
-    for metric, items in facts_by_metric.items():
-        reverse = metric in {"revenue_ttm", "close_price"}
-        items.sort(key=lambda item: _parse_date(item["period_end"]), reverse=reverse)
+    for items in facts_by_metric.values():
+        items.sort(key=_fact_order_key, reverse=True)
 
     calculations = [
         _revenue_growth(facts_by_metric, cutoff_excluded_fact_ids),
@@ -93,7 +92,7 @@ def _revenue_growth(
 ) -> dict[str, Any]:
     metric = "revenue_growth"
     formula = "(revenue_ttm_current - revenue_ttm_prior) / revenue_ttm_prior"
-    revenues = facts_by_metric.get("revenue_ttm", [])
+    revenues = _latest_distinct_period_facts(facts_by_metric.get("revenue_ttm", []), limit=2)
     if len(revenues) < 2:
         input_fact_ids = [fact["fact_id"] for fact in revenues[:1]]
         evidence_refs = _evidence_refs(revenues[:1])
@@ -550,6 +549,24 @@ def _latest_fact(
     return items[0] if items else None
 
 
+def _latest_distinct_period_facts(
+    facts: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    seen_periods: set[str] = set()
+    for fact in facts:
+        period_end = fact["period_end"]
+        if period_end in seen_periods:
+            continue
+        seen_periods.add(period_end)
+        results.append(fact)
+        if len(results) == limit:
+            break
+    return results
+
+
 def _evidence_refs(facts: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     refs: list[str] = []
@@ -585,3 +602,11 @@ def _decimal_value(fact: Mapping[str, Any]) -> Decimal | None:
 
 def _parse_date(value: Any) -> date:
     return date.fromisoformat(require_string(value, "period_end", strip=False))
+
+
+def _fact_order_key(fact: Mapping[str, Any]) -> tuple[date, datetime, str]:
+    return (
+        _parse_date(fact["period_end"]),
+        datetime.fromisoformat(require_string(fact["available_at"], "available_at", strip=False)),
+        require_string(fact["fact_id"], "fact_id", strip=False),
+    )

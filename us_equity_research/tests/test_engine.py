@@ -330,6 +330,56 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn("target_price", serialized)
         self.assertNotIn("forecast", serialized)
 
+    def test_data_status_uses_chronological_datetimes_across_mixed_offsets(self) -> None:
+        raw = copy.deepcopy(_load_demo_snapshot())
+        raw["evidence"].extend(  # type: ignore[index]
+            [
+                {
+                    "evidence_id": "EV-OFFSET-OFFICIAL-EARLY",
+                    "source_level": "official",
+                    "category": "issuer_ir",
+                    "title": "Earlier mixed-offset official evidence",
+                    "summary": "Lexically later timestamp but chronologically earlier than existing macro evidence.",
+                    "source_url": "https://ir.example.invalid/us/demoa/offset-official",
+                    "source_document_id": "doc-ir-demoa-offset-official",
+                    "published_at": "2026-08-15T15:30:00+09:00",
+                    "effective_at": "2026-08-15T15:30:00+09:00",
+                    "available_at": "2026-08-15T16:00:00+09:00",
+                    "retrieved_at": "2026-08-16T07:45:00-04:00",
+                    "as_of": "2026-08-15T16:00:00+09:00",
+                },
+                {
+                    "evidence_id": "EV-OFFSET-MARKET-EARLY",
+                    "source_level": "structured_market",
+                    "category": "market_price",
+                    "title": "Earlier mixed-offset market evidence",
+                    "summary": "Lexically later timestamp but chronologically earlier than the existing close evidence.",
+                    "source_url": "https://market.example.invalid/us/demoa/offset-close",
+                    "source_document_id": "doc-market-demoa-offset-close",
+                    "published_at": "2026-08-16T00:30:00+09:00",
+                    "effective_at": "2026-08-16T00:30:00+09:00",
+                    "available_at": "2026-08-16T00:30:00+09:00",
+                    "retrieved_at": "2026-08-16T07:46:00-04:00",
+                    "as_of": "2026-08-16T00:30:00+09:00",
+                },
+            ]
+        )
+        raw["themes"][0]["candidates"][0]["evidence_refs"].append("EV-OFFSET-OFFICIAL-EARLY")  # type: ignore[index]
+        raw["themes"][0]["candidates"][0]["market_evidence_refs"].append("EV-OFFSET-MARKET-EARLY")  # type: ignore[index]
+        snapshot = validate_snapshot(raw)
+
+        packet = build_research_packet(
+            snapshot,
+            _request("stock_research", symbol="DEMOA"),
+            generated_at=datetime.fromisoformat("2026-08-16T10:35:00-04:00"),
+        )
+
+        self.assertEqual(
+            packet["data_status"]["official_primary_latest_available_at"],
+            "2026-08-15T09:00:00-04:00",
+        )
+        self.assertEqual(packet["data_status"]["market_latest_as_of"], "2026-08-15T16:00:00-04:00")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -415,8 +415,14 @@ def _data_status(
     return {
         "status": "completed",
         "decision_count": len(decisions),
-        "official_primary_latest_available_at": max(official_times) if official_times else None,
-        "market_latest_as_of": max(market_dates) if market_dates else None,
+        "official_primary_latest_available_at": _latest_timestamp_value(
+            official_times,
+            field_name="available_at",
+        ),
+        "market_latest_as_of": _latest_timestamp_value(
+            market_dates,
+            field_name="as_of",
+        ),
     }
 
 
@@ -450,3 +456,19 @@ def _unique_strings(values: list[str]) -> list[str]:
 def _sha256_value(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _latest_timestamp_value(
+    values: list[str],
+    *,
+    field_name: str,
+) -> str | None:
+    if not values:
+        return None
+    return max(
+        values,
+        key=lambda value: (
+            parse_datetime(value, field_name),
+            value,
+        ),
+    )
