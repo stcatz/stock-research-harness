@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -9,7 +10,9 @@ import tempfile
 import unittest
 from importlib.resources import files
 from pathlib import Path
+from unittest.mock import patch
 
+from us_equity_research.core import pipeline as pipeline_module
 from us_equity_research.core.pipeline import read_artifact, run_research
 from us_equity_research.core.reporting import (
     DISCLAIMER,
@@ -230,6 +233,86 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(second, first)
         self.assertEqual(after, before)
         self.assertEqual(after_mtimes, before_mtimes)
+        self.assertEqual(
+            list((self.workspace / "artifacts" / "us" / "runs").glob(".*.stale-*")),
+            [],
+        )
+
+    def test_preexisting_partial_final_run_is_quarantined_and_rebuilt(self) -> None:
+        with tempfile.TemporaryDirectory() as reference_directory:
+            reference = run_research(_request(), Path(reference_directory))
+        run_id = str(reference["run_id"])
+        artifact_store = self.workspace / "artifacts" / "us" / "runs"
+        partial_run = artifact_store / run_id
+        partial_run.mkdir(parents=True)
+        partial_content = b"interrupted-before-manifest\n"
+        (partial_run / "request.json").write_bytes(partial_content)
+
+        result = run_research(_request(), self.workspace)
+
+        self.assertEqual(result["run_id"], run_id)
+        self.assertEqual({path.name for path in partial_run.iterdir()}, IMMUTABLE_FILENAMES)
+        quarantined = list(artifact_store.glob(f".{run_id}.stale-*"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual((quarantined[0] / "request.json").read_bytes(), partial_content)
+
+    def test_interrupted_staging_write_does_not_brick_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as reference_directory:
+            reference = run_research(_request(), Path(reference_directory))
+        run_id = str(reference["run_id"])
+        original_write = pipeline_module.write_json_atomic
+        call_count = 0
+
+        def interrupted_write(path: Path, value: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise OSError("simulated interruption")
+            original_write(path, value)
+
+        with (
+            patch.object(
+                pipeline_module,
+                "write_json_atomic",
+                side_effect=interrupted_write,
+            ),
+            self.assertRaisesRegex(OSError, "simulated interruption"),
+        ):
+            run_research(_request(), self.workspace)
+
+        artifact_store = self.workspace / "artifacts" / "us" / "runs"
+        self.assertFalse(os.path.lexists(artifact_store / run_id))
+        interrupted_stages = list(artifact_store.glob(f".{run_id}.tmp-*"))
+        self.assertEqual(len(interrupted_stages), 1)
+        self.assertTrue((interrupted_stages[0] / "request.json").is_file())
+
+        retried = run_research(_request(), self.workspace)
+
+        self.assertEqual(retried["run_id"], run_id)
+        final_run = artifact_store / run_id
+        self.assertEqual({path.name for path in final_run.iterdir()}, IMMUTABLE_FILENAMES)
+
+    def test_preexisting_run_symlink_is_moved_without_touching_target(self) -> None:
+        with tempfile.TemporaryDirectory() as reference_directory:
+            reference = run_research(_request(), Path(reference_directory))
+        run_id = str(reference["run_id"])
+        artifact_store = self.workspace / "artifacts" / "us" / "runs"
+        artifact_store.mkdir(parents=True)
+        outside_target = self.workspace / "outside-target"
+        outside_target.mkdir()
+        sentinel = outside_target / "sentinel.txt"
+        sentinel.write_text("preserve me", encoding="utf-8")
+        final_run = artifact_store / run_id
+        final_run.symlink_to(outside_target, target_is_directory=True)
+
+        result = run_research(_request(), self.workspace)
+
+        self.assertEqual(result["run_id"], run_id)
+        self.assertFalse(final_run.is_symlink())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve me")
+        quarantined = list(artifact_store.glob(f".{run_id}.stale-*"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertTrue(quarantined[0].is_symlink())
 
     def test_independent_workspace_replay_preserves_all_stable_analysis(self) -> None:
         first = run_research(_request(), self.workspace)
@@ -342,6 +425,36 @@ class PipelineTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "immutable artifact hash mismatch"):
             run_research(_request(), self.workspace)
+
+    def test_artifact_read_returns_verified_bytes_without_second_reopen(self) -> None:
+        result = run_research(_request(), self.workspace)
+        summary_path = (
+            self.workspace / "artifacts" / "us" / "runs" / str(result["run_id"]) / "summary.json"
+        )
+        expected = summary_path.read_text(encoding="utf-8")
+        original_verify = pipeline_module._verify_complete_run
+
+        def mutate_after_verification(*args: object, **kwargs: object) -> object:
+            verified = original_verify(*args, **kwargs)
+            summary_path.write_text('{"unverified":"replacement"}\n', encoding="utf-8")
+            return verified
+
+        with patch.object(
+            pipeline_module,
+            "_verify_complete_run",
+            side_effect=mutate_after_verification,
+        ):
+            artifact = read_artifact(
+                {
+                    "artifact_id": result["artifact_id"],
+                    "section": "summary",
+                    "max_chars": 20000,
+                },
+                self.workspace,
+            )
+
+        self.assertEqual(artifact["content"], expected)
+        self.assertNotIn("unverified", artifact["content"])
 
     def test_database_path_escape_is_refused(self) -> None:
         result = run_research(_request(), self.workspace)

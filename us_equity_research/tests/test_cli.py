@@ -119,6 +119,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(error["market"], "US")
         self.assertIn("permanently bound", error["message"])
 
+    def test_filesystem_errors_do_not_expose_absolute_paths(self) -> None:
+        private_path = self.workspace / "private" / "missing-request.json"
+
+        run = self._run_cli("run", "--request-json", str(private_path))
+
+        self.assertEqual(run.returncode, 2)
+        self.assertEqual(run.stdout, "")
+        error = json.loads(run.stderr)
+        self.assertEqual(error["market"], "US")
+        self.assertEqual(error["error"], "FileNotFoundError")
+        self.assertEqual(error["message"], "filesystem operation failed")
+        self.assertNotIn(str(private_path), run.stderr)
+        self.assertNotIn(str(self.workspace), run.stderr)
+
     def _run_cli(
         self, *args: str, input_text: str | None = None
     ) -> subprocess.CompletedProcess[str]:

@@ -90,7 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "schema_version": SCHEMA_VERSION,
                 "market": MARKET,
                 "error": type(exc).__name__,
-                "message": str(exc),
+                "message": _safe_error_message(exc),
             },
             stream=sys.stderr,
         )
@@ -120,6 +120,12 @@ def _read_json(value: str) -> dict[str, Any]:
 
 def _write_json(payload: dict[str, Any], *, stream: Any = sys.stdout) -> None:
     stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    if isinstance(exc, OSError):
+        return "filesystem operation failed"
+    return str(exc)
 
 
 if __name__ == "__main__":

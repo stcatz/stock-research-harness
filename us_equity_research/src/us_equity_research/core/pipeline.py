@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
+import stat
+import tempfile
+import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from importlib.resources import files as resource_files
 from pathlib import Path
@@ -12,7 +18,14 @@ from .locking import run_lock
 from .reporting import render_report
 from .snapshot import load_snapshot, validate_snapshot
 from .storage import artifact_record, database_path, initialize_workspace, record_run
-from .utils import read_json, sha256_file, sha256_value, write_json_atomic, write_text_atomic
+from .utils import (
+    fsync_directory,
+    sha256_bytes,
+    sha256_file,
+    sha256_value,
+    write_json_atomic,
+    write_text_atomic,
+)
 
 IMMUTABLE_FILE_NAMES = (
     "request.json",
@@ -48,6 +61,14 @@ STABLE_MANIFEST_FIELDS = (
 )
 
 
+@dataclass(frozen=True)
+class VerifiedRun:
+    manifest: dict[str, Any]
+    summary: dict[str, Any]
+    packet: dict[str, Any]
+    file_bytes: dict[str, bytes]
+
+
 def run_research(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
     request = RunRequest.from_dict(dict(raw_request))
     workspace = workspace.resolve()
@@ -67,21 +88,24 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
     if record is None:
         raise KeyError(f"artifact not found: {request.artifact_id}")
 
-    run_dir = _resolve_recorded_run_dir(workspace, record.get("run_dir"))
-    manifest, _, _ = _verify_complete_run(workspace, run_dir)
-    _verify_database_record(record, manifest)
-    if manifest["artifact_id"] != request.artifact_id:
-        raise RuntimeError("artifact id does not match its immutable manifest")
+    run_id = record.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise RuntimeError("stored artifact run id is invalid")
+    with run_lock(workspace, run_id):
+        run_dir = _resolve_recorded_run_dir(workspace, record.get("run_dir"))
+        verified = _verify_complete_run(workspace, run_dir)
+        _verify_database_record(record, verified.manifest)
+        if verified.manifest["artifact_id"] != request.artifact_id:
+            raise RuntimeError("artifact id does not match its immutable manifest")
 
-    filename = {
-        "summary": "summary.json",
-        "report": "report.md",
-        "manifest": "manifest.json",
-        "packet": "research_packet.json",
-    }[request.section]
-    path = run_dir / filename
-    _ensure_inside_artifact_store(workspace, path.resolve())
-    content = path.read_text(encoding="utf-8")
+        filename = {
+            "summary": "summary.json",
+            "report": "report.md",
+            "manifest": "manifest.json",
+            "packet": "research_packet.json",
+        }[request.section]
+        content = _decode_utf8(verified.file_bytes[filename], filename)
+        relative_path = verified.manifest["paths"][request.section]
     truncated = len(content) > request.max_chars
     if truncated:
         marker = "\n…[truncated]"
@@ -94,7 +118,7 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
         "content_type": "text/markdown" if request.section == "report" else "application/json",
         "content": content,
         "truncated": truncated,
-        "relative_path": path.relative_to(workspace).as_posix(),
+        "relative_path": relative_path,
     }
 
 
@@ -127,15 +151,20 @@ def _materialize_run(
     snapshot_data: dict[str, Any],
     packet: dict[str, Any],
 ) -> dict[str, Any]:
-    artifact_store = workspace / "artifacts" / "us" / "runs"
+    artifact_store = _artifact_store(workspace)
     run_dir = artifact_store / packet["run_id"]
-    _ensure_run_directory(workspace, run_dir.resolve())
-    manifest_path = run_dir / "manifest.json"
-    if manifest_path.is_file():
-        return _reuse_complete_run(workspace, run_dir)
-    if run_dir.exists() and any(run_dir.iterdir()):
-        raise RuntimeError(f"incomplete immutable run directory exists: {packet['run_id']}")
-    run_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_direct_child(artifact_store, run_dir)
+    existing = _prepare_existing_run(workspace, run_dir)
+    if existing is not None:
+        return _reuse_verified_run(workspace, existing)
+
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{packet['run_id']}.tmp-",
+            dir=artifact_store,
+        )
+    )
+    _ensure_direct_child(artifact_store, staging_dir)
 
     request_payload = request.to_dict()
     stable_manifest = _stable_manifest(request_payload, packet)
@@ -145,11 +174,11 @@ def _materialize_run(
     paths = _manifest_paths(workspace, run_dir)
 
     output_paths = {
-        "request.json": run_dir / "request.json",
-        "snapshot.json": run_dir / "snapshot.json",
-        "research_packet.json": run_dir / "research_packet.json",
-        "report.md": run_dir / "report.md",
-        "summary.json": run_dir / "summary.json",
+        "request.json": staging_dir / "request.json",
+        "snapshot.json": staging_dir / "snapshot.json",
+        "research_packet.json": staging_dir / "research_packet.json",
+        "report.md": staging_dir / "report.md",
+        "summary.json": staging_dir / "summary.json",
     }
     write_json_atomic(output_paths["request.json"], request_payload)
     write_json_atomic(output_paths["snapshot.json"], snapshot_data)
@@ -168,40 +197,87 @@ def _materialize_run(
         "paths": paths,
         "integrity_hash": integrity_hash,
     }
-    write_json_atomic(manifest_path, manifest)
+    write_json_atomic(staging_dir / "manifest.json", manifest)
 
-    verified_manifest, verified_summary, verified_packet = _verify_complete_run(workspace, run_dir)
-    record_run(workspace, verified_packet, verified_summary, verified_manifest)
-    _write_convenience_report(workspace, verified_packet, report)
-    return verified_summary
+    _verify_complete_run(workspace, staging_dir, logical_run_dir=run_dir)
+    _publish_staged_run(artifact_store, staging_dir, run_dir)
+    verified = _verify_complete_run(workspace, run_dir)
+    record_run(workspace, verified.packet, verified.summary, verified.manifest)
+    _write_convenience_report(
+        workspace,
+        verified.packet,
+        _decode_utf8(verified.file_bytes["report.md"], "report.md"),
+    )
+    return verified.summary
 
 
-def _reuse_complete_run(workspace: Path, run_dir: Path) -> dict[str, Any]:
-    manifest, summary, packet = _verify_complete_run(workspace, run_dir)
-    record_run(workspace, packet, summary, manifest)
-    report = (run_dir / "report.md").read_text(encoding="utf-8")
-    _write_convenience_report(workspace, packet, report)
-    return summary
+def _reuse_verified_run(workspace: Path, verified: VerifiedRun) -> dict[str, Any]:
+    record_run(workspace, verified.packet, verified.summary, verified.manifest)
+    report = _decode_utf8(verified.file_bytes["report.md"], "report.md")
+    _write_convenience_report(workspace, verified.packet, report)
+    return verified.summary
+
+
+def _prepare_existing_run(workspace: Path, run_dir: Path) -> VerifiedRun | None:
+    if not os.path.lexists(run_dir):
+        return None
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        _quarantine_incomplete_run(run_dir)
+        return None
+    if os.path.lexists(run_dir / "manifest.json"):
+        # A published run with a manifest is immutable. Verification failures are
+        # surfaced as tampering; this path is never moved or overwritten.
+        return _verify_complete_run(workspace, run_dir)
+    _quarantine_incomplete_run(run_dir)
+    return None
+
+
+def _quarantine_incomplete_run(run_dir: Path) -> Path:
+    artifact_store = run_dir.parent
+    _ensure_direct_child(artifact_store, run_dir)
+    while True:
+        quarantine = artifact_store / f".{run_dir.name}.stale-{uuid.uuid4().hex}"
+        if not os.path.lexists(quarantine):
+            break
+    os.rename(run_dir, quarantine)
+    fsync_directory(artifact_store)
+    return quarantine
+
+
+def _publish_staged_run(
+    artifact_store: Path,
+    staging_dir: Path,
+    run_dir: Path,
+) -> None:
+    _ensure_direct_child(artifact_store, staging_dir)
+    _ensure_direct_child(artifact_store, run_dir)
+    if os.path.lexists(run_dir):
+        raise RuntimeError("immutable run destination appeared during publication")
+    os.rename(staging_dir, run_dir)
+    fsync_directory(artifact_store)
 
 
 def _verify_complete_run(
     workspace: Path,
     run_dir: Path,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    *,
+    logical_run_dir: Path | None = None,
+) -> VerifiedRun:
     workspace = workspace.resolve()
-    run_dir = run_dir.resolve()
-    _ensure_run_directory(workspace, run_dir)
-    expected_entries = {*IMMUTABLE_FILE_NAMES, "manifest.json"}
-    if not run_dir.is_dir() or {path.name for path in run_dir.iterdir()} != expected_entries:
-        raise RuntimeError(f"immutable run file set mismatch: {run_dir.name}")
+    artifact_store = _artifact_store(workspace)
+    _ensure_direct_child(artifact_store, run_dir)
+    if logical_run_dir is None:
+        logical_run_dir = run_dir
+    _ensure_direct_child(artifact_store, logical_run_dir)
 
-    manifest = _require_object(read_json(run_dir / "manifest.json"), "manifest")
+    file_bytes = _read_immutable_run_bytes(run_dir)
+    manifest = _read_json_bytes(file_bytes["manifest.json"], "manifest")
     if set(manifest) != MANIFEST_FIELDS:
-        raise RuntimeError(f"immutable manifest fields mismatch: {run_dir.name}")
+        raise RuntimeError(f"immutable manifest fields mismatch: {logical_run_dir.name}")
     stable_manifest = {key: manifest[key] for key in STABLE_MANIFEST_FIELDS}
     if sha256_value(stable_manifest) != manifest["manifest_hash"]:
-        raise RuntimeError(f"immutable manifest hash mismatch: {run_dir.name}")
-    if manifest["run_id"] != run_dir.name:
+        raise RuntimeError(f"immutable manifest hash mismatch: {logical_run_dir.name}")
+    if manifest["run_id"] != logical_run_dir.name:
         raise RuntimeError("immutable manifest run id mismatch")
     if manifest["schema_version"] != SCHEMA_VERSION:
         raise RuntimeError("immutable manifest schema version mismatch")
@@ -210,29 +286,23 @@ def _verify_complete_run(
 
     file_hashes = _require_object(manifest["files"], "manifest.files")
     if set(file_hashes) != set(IMMUTABLE_FILE_NAMES):
-        raise RuntimeError(f"immutable manifest file list mismatch: {run_dir.name}")
+        raise RuntimeError(f"immutable manifest file list mismatch: {logical_run_dir.name}")
     paths = _require_object(manifest["paths"], "manifest.paths")
-    if set(paths) != PATH_FIELDS or paths != _manifest_paths(workspace, run_dir):
-        raise RuntimeError(f"immutable manifest path map mismatch: {run_dir.name}")
+    if set(paths) != PATH_FIELDS or paths != _manifest_paths(workspace, logical_run_dir):
+        raise RuntimeError(f"immutable manifest path map mismatch: {logical_run_dir.name}")
     integrity_payload = {**stable_manifest, "files": file_hashes, "paths": paths}
     if sha256_value(integrity_payload) != manifest["integrity_hash"]:
-        raise RuntimeError(f"immutable manifest integrity mismatch: {run_dir.name}")
+        raise RuntimeError(f"immutable manifest integrity mismatch: {logical_run_dir.name}")
 
     for filename in IMMUTABLE_FILE_NAMES:
-        path = (run_dir / filename).resolve()
-        _ensure_inside_artifact_store(workspace, path)
-        if (
-            path.parent != run_dir
-            or not path.is_file()
-            or sha256_file(path) != file_hashes[filename]
-        ):
+        if sha256_bytes(file_bytes[filename]) != file_hashes[filename]:
             raise RuntimeError(f"immutable artifact hash mismatch: {filename}")
 
-    request_payload = _require_object(read_json(run_dir / "request.json"), "request")
-    snapshot_payload = _require_object(read_json(run_dir / "snapshot.json"), "snapshot")
-    packet = _require_object(read_json(run_dir / "research_packet.json"), "research packet")
-    summary = _require_object(read_json(run_dir / "summary.json"), "summary")
-    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    request_payload = _read_json_bytes(file_bytes["request.json"], "request")
+    snapshot_payload = _read_json_bytes(file_bytes["snapshot.json"], "snapshot")
+    packet = _read_json_bytes(file_bytes["research_packet.json"], "research packet")
+    summary = _read_json_bytes(file_bytes["summary.json"], "summary")
+    report = _decode_utf8(file_bytes["report.md"], "report.md")
 
     if sha256_value(request_payload) != manifest["request_hash"]:
         raise RuntimeError("immutable request hash mismatch")
@@ -263,7 +333,12 @@ def _verify_complete_run(
         raise RuntimeError("immutable report semantic mismatch")
     if _build_summary(packet, manifest["manifest_hash"]) != summary:
         raise RuntimeError("immutable summary semantic mismatch")
-    return manifest, summary, packet
+    return VerifiedRun(
+        manifest=manifest,
+        summary=summary,
+        packet=packet,
+        file_bytes=file_bytes,
+    )
 
 
 def _stable_manifest(
@@ -344,11 +419,9 @@ def _resolve_recorded_run_dir(workspace: Path, raw_path: Any) -> Path:
         raise RuntimeError("stored artifact path is invalid")
     relative_path = Path(raw_path)
     if relative_path.is_absolute() or ".." in relative_path.parts:
-        candidate = (workspace / relative_path).resolve()
-        _ensure_inside_artifact_store(workspace, candidate)
-        raise RuntimeError("stored artifact path is invalid")
-    candidate = (workspace / relative_path).resolve()
-    _ensure_inside_artifact_store(workspace, candidate)
+        raise RuntimeError("artifact path escaped the immutable US artifact store")
+    candidate = workspace / relative_path
+    _ensure_direct_child(_artifact_store(workspace), candidate)
     return candidate
 
 
@@ -370,19 +443,78 @@ def _verify_database_record(record: dict[str, Any], manifest: dict[str, Any]) ->
         raise RuntimeError("stored artifact index conflicts with immutable manifest")
 
 
-def _ensure_inside_artifact_store(workspace: Path, path: Path) -> None:
-    artifact_store = (workspace / "artifacts" / "us" / "runs").resolve()
-    try:
-        path.relative_to(artifact_store)
-    except ValueError as exc:
-        raise RuntimeError("artifact path escaped the immutable US artifact store") from exc
+def _artifact_store(workspace: Path) -> Path:
+    workspace = workspace.resolve()
+    artifact_store = workspace / "artifacts" / "us" / "runs"
+    if (
+        not artifact_store.is_dir()
+        or artifact_store.is_symlink()
+        or artifact_store.resolve() != artifact_store
+    ):
+        raise RuntimeError("immutable US artifact store is not a safe directory")
+    return artifact_store
 
 
-def _ensure_run_directory(workspace: Path, run_dir: Path) -> None:
-    _ensure_inside_artifact_store(workspace, run_dir)
-    artifact_store = (workspace / "artifacts" / "us" / "runs").resolve()
-    if run_dir.parent != artifact_store or not run_dir.name:
+def _ensure_direct_child(artifact_store: Path, path: Path) -> None:
+    if path.parent != artifact_store or not path.name or path.name in {".", ".."}:
         raise RuntimeError("stored US artifact run directory is invalid")
+
+
+def _read_immutable_run_bytes(run_dir: Path) -> dict[str, bytes]:
+    expected_entries = {*IMMUTABLE_FILE_NAMES, "manifest.json"}
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory_descriptor = os.open(run_dir, directory_flags)
+    except OSError as exc:
+        raise RuntimeError("immutable run directory is invalid") from exc
+
+    try:
+        if not stat.S_ISDIR(os.fstat(directory_descriptor).st_mode):
+            raise RuntimeError("immutable run directory is invalid")
+        if set(os.listdir(directory_descriptor)) != expected_entries:
+            raise RuntimeError(f"immutable run file set mismatch: {run_dir.name}")
+
+        result: dict[str, bytes] = {}
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        for filename in (*IMMUTABLE_FILE_NAMES, "manifest.json"):
+            try:
+                file_descriptor = os.open(
+                    filename,
+                    file_flags,
+                    dir_fd=directory_descriptor,
+                )
+            except OSError as exc:
+                raise RuntimeError(f"immutable artifact entry is invalid: {filename}") from exc
+            try:
+                if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                    raise RuntimeError(f"immutable artifact entry is invalid: {filename}")
+                with os.fdopen(file_descriptor, "rb", closefd=False) as handle:
+                    result[filename] = handle.read()
+            finally:
+                os.close(file_descriptor)
+
+        if set(os.listdir(directory_descriptor)) != expected_entries:
+            raise RuntimeError(
+                f"immutable run file set changed during verification: {run_dir.name}"
+            )
+        return result
+    finally:
+        os.close(directory_descriptor)
+
+
+def _read_json_bytes(value: bytes, field: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(_decode_utf8(value, field))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"immutable {field} is not valid JSON") from exc
+    return _require_object(decoded, field)
+
+
+def _decode_utf8(value: bytes, field: str) -> str:
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"immutable {field} is not valid UTF-8") from exc
 
 
 def _require_object(value: Any, field: str) -> dict[str, Any]:
