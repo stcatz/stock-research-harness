@@ -143,6 +143,17 @@ class SnapshotBuilderTests(unittest.TestCase):
             )
         self.assertEqual((self.workspace / first.relative_path).read_bytes(), original)
 
+    def test_rejects_retrieved_at_override_without_explicit_provider(self) -> None:
+        with self.assertRaisesRegex(
+            CollectionError, "retrieved_at override requires an explicitly injected provider"
+        ):
+            collect_cn_snapshot(
+                _research_seed(),
+                workspace=self.workspace,
+                snapshot_id="forged-live-time",
+                retrieved_at=self.retrieved_at,
+            )
+
     def test_rejects_market_data_in_seed_before_calling_provider(self) -> None:
         seed = _research_seed()
         seed["evidence"].append(

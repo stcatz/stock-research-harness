@@ -93,7 +93,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(error["market"], "CN")
         self.assertIn("permanently bound", error["message"])
 
-    def test_collect_snapshot_dispatches_seed_and_timezone_aware_retrieval_time(self) -> None:
+    def test_collect_snapshot_dispatches_seed_and_workspace(self) -> None:
         seed_path = self.workspace / "seed.json"
         seed = {"schema_version": "0.1", "market": "CN", "evidence": [], "themes": []}
         seed_path.write_text(json.dumps(seed), encoding="utf-8")
@@ -118,8 +118,6 @@ class CliTests(unittest.TestCase):
                     str(seed_path),
                     "--snapshot-id",
                     "cn-test",
-                    "--retrieved-at",
-                    "2026-08-17T18:00:00+08:00",
                 ]
             )
 
@@ -129,7 +127,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(call.args, (seed,))
         self.assertEqual(call.kwargs["workspace"], self.workspace.resolve())
         self.assertEqual(call.kwargs["snapshot_id"], "cn-test")
-        self.assertEqual(call.kwargs["retrieved_at"].isoformat(), "2026-08-17T18:00:00+08:00")
+        self.assertNotIn("retrieved_at", call.kwargs)
+
+    def test_collect_snapshot_rejects_public_retrieved_at_override(self) -> None:
+        seed_path = self.workspace / "seed.json"
+        seed_path.write_text(
+            json.dumps({"schema_version": "0.1", "market": "CN", "evidence": [], "themes": []}),
+            encoding="utf-8",
+        )
+        stderr = io.StringIO()
+
+        with (
+            self.assertRaises(SystemExit) as error,
+            patch("sys.stderr", stderr),
+        ):
+            main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "collect-snapshot",
+                    "--seed-json",
+                    str(seed_path),
+                    "--snapshot-id",
+                    "cn-test",
+                    "--retrieved-at",
+                    "2026-08-17T18:00:00+08:00",
+                ]
+            )
+
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("unrecognized arguments: --retrieved-at", stderr.getvalue())
 
     def test_cli_redacts_filesystem_error_paths(self) -> None:
         stdout = io.StringIO()

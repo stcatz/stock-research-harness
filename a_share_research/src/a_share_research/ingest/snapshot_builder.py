@@ -96,6 +96,7 @@ def collect_cn_snapshot(
     normalized_seed, candidate_symbols = _validate_and_copy_seed(seed)
     resolved_workspace = Path(workspace).expanduser().resolve()
     target = _preflight_output_target(resolved_workspace, snapshot_id)
+    _reject_public_retrieved_at_override(retrieved_at, provider)
 
     if provider is None:
         from .baostock import BaoStockProvider
@@ -127,6 +128,15 @@ def validate_research_seed(seed: Mapping[str, Any]) -> dict[str, Any]:
 
     normalized, _candidate_symbols = _validate_and_copy_seed(seed)
     return normalized
+
+
+def _reject_public_retrieved_at_override(
+    retrieved_at: datetime | None, provider: DailyMarketDataProvider | None
+) -> None:
+    if retrieved_at is not None and provider is None:
+        raise CollectionError(
+            "retrieved_at override requires an explicitly injected provider"
+        )
 
 
 def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:

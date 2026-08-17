@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .core.contracts import SCHEMA_VERSION, ContractError, parse_datetime
+from .core.contracts import SCHEMA_VERSION, ContractError
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.storage import initialize_workspace
 from .ingest import collect_cn_snapshot
@@ -56,10 +56,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Immutable identifier for the normalized snapshot",
     )
-    collect_parser.add_argument(
-        "--retrieved-at",
-        help="Optional timezone-aware collection time; omit in production to use current time",
-    )
 
     demo_parser = subparsers.add_parser(
         "demo", help="Run the explicit synthetic installation fixture"
@@ -91,11 +87,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _read_json(args.seed_json),
                 workspace=workspace,
                 snapshot_id=args.snapshot_id,
-                retrieved_at=(
-                    parse_datetime(args.retrieved_at, "retrieved_at")
-                    if args.retrieved_at is not None
-                    else None
-                ),
             )
             result = collected.to_dict()
         else:
