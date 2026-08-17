@@ -134,9 +134,7 @@ def _reject_public_retrieved_at_override(
     retrieved_at: datetime | None, provider: DailyMarketDataProvider | None
 ) -> None:
     if retrieved_at is not None and provider is None:
-        raise CollectionError(
-            "retrieved_at override requires an explicitly injected provider"
-        )
+        raise CollectionError("retrieved_at override requires an explicitly injected provider")
 
 
 def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tuple[str, ...]]:
