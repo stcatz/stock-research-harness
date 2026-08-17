@@ -371,6 +371,39 @@ class SecSnapshotCollectionTests(unittest.TestCase):
         self.assertEqual(snapshot["evidence"], [])
         self.assertEqual(snapshot["financial_facts"], [])
 
+    def test_companyfacts_period_end_cannot_exceed_seed_as_of(self) -> None:
+        companyfacts = _companyfacts()
+        concepts = companyfacts["facts"]["us-gaap"]
+        revenue = concepts["RevenueFromContractWithCustomerExcludingAssessedTax"]["units"]["USD"][0]
+        revenue["start"] = "2026-01-01"
+        revenue["end"] = "2026-12-31"
+        cash = concepts["CashAndCashEquivalentsAtCarryingValue"]["units"]["USD"][0]
+        cash["end"] = "2026-12-31"
+        client = SecClient(
+            user_agent="Stock Research test@example.com",
+            transport=FakeSecTransport(companyfacts=companyfacts),
+        )
+        seed = _seed()
+        seed["as_of"] = "2025-12-31T23:59:59+00:00"
+        self.seed_path.write_text(json.dumps(seed), encoding="utf-8")
+
+        result = collect_sec_snapshot(
+            workspace=self.workspace,
+            seed_path=self.seed_path,
+            snapshot_id="fact-period-cutoff",
+            client=client,
+            clock=_clock,
+        )
+        snapshot = json.loads(
+            (self.workspace / result["relative_path"]).read_text(encoding="utf-8")
+        )
+        metrics = {fact["metric"] for fact in snapshot["financial_facts"]}
+        self.assertNotIn("revenue_fy", metrics)
+        self.assertNotIn("cash_and_equivalents", metrics)
+        self.assertTrue(
+            all(fact["period_end"] <= "2025-12-31" for fact in snapshot["financial_facts"])
+        )
+
     def test_refuses_to_overwrite_an_existing_snapshot(self) -> None:
         kwargs = {
             "workspace": self.workspace,

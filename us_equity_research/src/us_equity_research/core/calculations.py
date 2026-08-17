@@ -121,6 +121,19 @@ def _revenue_growth(
 
     current_fact = revenues[0]
     prior_fact = revenues[1]
+    if revenue_metric == "revenue_fy":
+        fiscal_year_gap = (
+            _parse_date(current_fact["period_end"]) - _parse_date(prior_fact["period_end"])
+        ).days
+        if not 300 <= fiscal_year_gap <= 400:
+            return _unknown(
+                metric,
+                formula,
+                "ratio",
+                [current_fact["fact_id"], prior_fact["fact_id"]],
+                _evidence_refs([current_fact, prior_fact]),
+                current_fact["period_end"],
+            )
     current_value = _decimal_value(current_fact)
     prior_value = _decimal_value(prior_fact)
     input_facts = [current_fact, prior_fact]

@@ -123,6 +123,36 @@ class CalculationTests(unittest.TestCase):
                 self.assertEqual(calculations[metric]["status"], "UNKNOWN")
                 self.assertIsNone(calculations[metric]["value"])
 
+    def test_fy_revenue_growth_requires_adjacent_fiscal_years(self) -> None:
+        raw = copy.deepcopy(_load_demo_snapshot())
+        facts = {fact["fact_id"]: fact for fact in raw["financial_facts"]}  # type: ignore[index]
+        current = facts["FACT-DEMOA-REV-TTM"]
+        prior = facts["FACT-DEMOA-REV-TTM-PRIOR"]
+        current["metric"] = "revenue_fy"
+        current["period_end"] = "2025-12-31"
+        prior["metric"] = "revenue_fy"
+        prior["period_end"] = "2023-12-31"
+
+        snapshot = validate_snapshot(raw)
+        calculations = {
+            item["metric"]: item
+            for item in build_calculation_bundle(
+                snapshot, _demoa_candidate(snapshot.data), DECISION_AT
+            )["calculations"]
+        }
+
+        growth = calculations["revenue_growth"]
+        self.assertEqual(growth["status"], "UNKNOWN")
+        self.assertIsNone(growth["value"])
+        self.assertEqual(
+            growth["formula"],
+            "(revenue_fy_current - revenue_fy_prior) / revenue_fy_prior",
+        )
+        self.assertEqual(
+            growth["input_fact_ids"],
+            ["FACT-DEMOA-REV-TTM", "FACT-DEMOA-REV-TTM-PRIOR"],
+        )
+
     def test_demoa_calculations_are_deterministic_and_traceable(self) -> None:
         snapshot = validate_snapshot(_load_demo_snapshot())
         bundle = build_calculation_bundle(snapshot, _demoa_candidate(snapshot.data), DECISION_AT)

@@ -343,6 +343,7 @@ def _collect_candidate(
         filings=filings,
         security_id=seed["security_id"],
         symbol=seed["symbol"],
+        observation_cutoff=snapshot_as_of.date(),
     )
 
     selected_accessions = set(fact_accessions)
@@ -515,6 +516,7 @@ def _extract_financial_facts(
     filings: Mapping[str, Mapping[str, Any]],
     security_id: str,
     symbol: str,
+    observation_cutoff: date,
 ) -> tuple[list[dict[str, Any]], set[str], date | None]:
     metrics: list[dict[str, Any]] = []
     annual_period_end: date | None = None
@@ -529,6 +531,7 @@ def _extract_financial_facts(
         ),
         "USD",
         filings,
+        observation_cutoff=observation_cutoff,
         limit=2,
     )
     revenue = revenues[0] if revenues else None
@@ -537,24 +540,28 @@ def _extract_financial_facts(
         ("OperatingIncomeLoss", "ProfitLossFromOperatingActivities"),
         "USD",
         filings,
+        observation_cutoff=observation_cutoff,
     )
     operating_cash = _select_annual_entry(
         companyfacts,
         ("NetCashProvidedByUsedInOperatingActivities", "CashFlowsFromUsedInOperatingActivities"),
         "USD",
         filings,
+        observation_cutoff=observation_cutoff,
     )
     capex = _select_annual_entry(
         companyfacts,
         ("PaymentsToAcquirePropertyPlantAndEquipment", "PurchaseOfPropertyPlantAndEquipment"),
         "USD",
         filings,
+        observation_cutoff=observation_cutoff,
     )
     cash = _select_instant_entry(
         companyfacts,
         ("CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalents"),
         "USD",
         filings,
+        observation_cutoff=observation_cutoff,
     )
     for revenue_entry in revenues:
         metrics.append(_financial_fact("revenue_fy", revenue_entry, security_id, symbol, "USD"))
@@ -585,8 +592,17 @@ def _select_annual_entry(
     concepts: tuple[str, ...],
     unit: str,
     filings: Mapping[str, Mapping[str, Any]],
+    *,
+    observation_cutoff: date,
 ) -> dict[str, Any] | None:
-    entries = _select_annual_entries(companyfacts, concepts, unit, filings, limit=1)
+    entries = _select_annual_entries(
+        companyfacts,
+        concepts,
+        unit,
+        filings,
+        observation_cutoff=observation_cutoff,
+        limit=1,
+    )
     return entries[0] if entries else None
 
 
@@ -596,6 +612,7 @@ def _select_annual_entries(
     unit: str,
     filings: Mapping[str, Mapping[str, Any]],
     *,
+    observation_cutoff: date,
     limit: int,
 ) -> list[dict[str, Any]]:
     candidates: list[tuple[date, datetime, int, dict[str, Any]]] = []
@@ -616,7 +633,12 @@ def _select_annual_entries(
                 continue
             start = _optional_date(entry.get("start"))
             end = _optional_date(entry.get("end"))
-            if start is None or end is None or not 300 <= (end - start).days <= 400:
+            if (
+                start is None
+                or end is None
+                or end > observation_cutoff
+                or not 300 <= (end - start).days <= 400
+            ):
                 continue
             value = entry.get("val")
             if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -638,6 +660,8 @@ def _select_instant_entry(
     concepts: tuple[str, ...],
     unit: str,
     filings: Mapping[str, Mapping[str, Any]],
+    *,
+    observation_cutoff: date,
 ) -> dict[str, Any] | None:
     candidates: list[tuple[date, datetime, int, dict[str, Any]]] = []
     for priority, concept in enumerate(concepts):
@@ -648,41 +672,16 @@ def _select_instant_entry(
                 continue
             end = _optional_date(entry.get("end"))
             value = entry.get("val")
-            if end is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+            if (
+                end is None
+                or end > observation_cutoff
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+            ):
                 continue
             normalized = {**entry, "end": end, "val": float(value)}
             candidates.append((end, filing["acceptance"], -priority, normalized))
     return max(candidates, default=None, key=lambda item: item[:3])[3] if candidates else None
-
-
-def _extract_debt(
-    companyfacts: Mapping[str, Any],
-    filings: Mapping[str, Mapping[str, Any]],
-) -> dict[str, Any] | None:
-    direct = _select_instant_entry(
-        companyfacts,
-        ("LongTermDebtAndFinanceLeaseObligations", "LongTermDebt"),
-        "USD",
-        filings,
-    )
-    if direct is not None:
-        return direct
-    pairs = (
-        (
-            "LongTermDebtAndFinanceLeaseObligationsCurrent",
-            "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
-        ),
-        ("LongTermDebtCurrent", "LongTermDebtNoncurrent"),
-        ("BorrowingsCurrent", "BorrowingsNoncurrent"),
-    )
-    for current_concept, noncurrent_concept in pairs:
-        current = _select_instant_entry(companyfacts, (current_concept,), "USD", filings)
-        noncurrent = _select_instant_entry(companyfacts, (noncurrent_concept,), "USD", filings)
-        if current and noncurrent and _same_period_and_accession(current, noncurrent):
-            combined = dict(current)
-            combined["val"] = current["val"] + noncurrent["val"]
-            return combined
-    return None
 
 
 def _concept_entries(
