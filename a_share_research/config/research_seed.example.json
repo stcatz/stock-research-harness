@@ -1,0 +1,122 @@
+{
+  "schema_version": "0.1",
+  "market": "CN",
+  "example_notice": "SYNTHETIC FORMAT EXAMPLE ONLY. Replace every evidence item, candidate and conclusion with verified research before collection. Do not use this file for a real report.",
+  "evidence": [
+    {
+      "evidence_id": "EXAMPLE-POLICY-001",
+      "category": "policy",
+      "source_level": "official",
+      "title": "[合成示例] 待替换的政策原文",
+      "source_url": "https://example.invalid/cn-policy-source",
+      "published_at": "2026-08-17T09:00:00+08:00",
+      "available_at": "2026-08-17T09:00:00+08:00",
+      "retrieved_at": "2026-08-17T10:00:00+08:00",
+      "as_of": "2026-08-17T09:00:00+08:00",
+      "summary": "合成格式示例，不代表任何真实政策。正式使用前必须替换为已核验的官方原文。"
+    },
+    {
+      "evidence_id": "EXAMPLE-COMPANY-001",
+      "category": "company_disclosure",
+      "source_level": "official",
+      "title": "[合成示例] 待替换的公司公告",
+      "source_url": "https://example.invalid/cn-company-disclosure",
+      "published_at": "2026-08-17T09:30:00+08:00",
+      "available_at": "2026-08-17T09:30:00+08:00",
+      "retrieved_at": "2026-08-17T10:00:00+08:00",
+      "as_of": "2026-08-17T09:30:00+08:00",
+      "summary": "合成格式示例，不代表任何真实公司披露、订单、收入或利润。"
+    }
+  ],
+  "themes": [
+    {
+      "theme_id": "theme-example-replace-me",
+      "name": "[合成示例] 请替换为已核验题材",
+      "event_type": "policy",
+      "stage": "organizing",
+      "dimensions": {
+        "big": {
+          "assessment": "unknown",
+          "reason": "合成示例没有真实证据，规模未知。",
+          "evidence_refs": [
+            "EXAMPLE-POLICY-001"
+          ]
+        },
+        "new": {
+          "assessment": "unknown",
+          "reason": "合成示例没有真实预期差证据。",
+          "evidence_refs": [
+            "EXAMPLE-POLICY-001"
+          ]
+        },
+        "many": {
+          "assessment": "unknown",
+          "reason": "行情必须由 collect-snapshot 现场采集，种子不得预填。",
+          "evidence_refs": [
+            "EXAMPLE-POLICY-001"
+          ]
+        },
+        "durable": {
+          "assessment": "unknown",
+          "reason": "合成示例没有真实持续性证据。",
+          "evidence_refs": [
+            "EXAMPLE-POLICY-001"
+          ]
+        },
+        "timely": {
+          "assessment": "unknown",
+          "reason": "正式使用前必须重新核验事件时间与市场阶段。",
+          "evidence_refs": [
+            "EXAMPLE-POLICY-001"
+          ]
+        }
+      },
+      "evidence_refs": [
+        "EXAMPLE-POLICY-001"
+      ],
+      "transmission_chain": [
+        "已核验事件",
+        "可验证的产业影响",
+        "可验证的公司收入或利润影响"
+      ],
+      "next_catalyst_at": "2099-01-01T09:00:00+08:00",
+      "counter_thesis": "这是合成格式示例，不存在可采信的投资论点。",
+      "invalidation_conditions": [
+        "任一来源仍指向 example.invalid",
+        "任一结论仍带有合成示例标记"
+      ],
+      "data_gaps": [
+        "全部事实、来源、题材与候选均待替换和人工复核"
+      ],
+      "candidates": [
+        {
+          "security_id": "CN.EXAMPLE.600000",
+          "symbol": "600000",
+          "name": "[合成示例] 请替换候选公司",
+          "role": "core",
+          "thesis": "仅演示字段结构，不代表该代码对应公司的真实研究结论。",
+          "counter_thesis": "没有真实证据，不应形成任何投资判断。",
+          "evidence_refs": [
+            "EXAMPLE-COMPANY-001"
+          ],
+          "market_evidence_refs": [],
+          "invalidation_conditions": [
+            "尚未替换全部合成内容"
+          ],
+          "data_gaps": [
+            "缺少全部真实研究证据"
+          ],
+          "risk_flags": [
+            "EXAMPLE_ONLY",
+            "REGULATORY_MAJOR"
+          ],
+          "manual_review_items": [
+            "替换公司代码、名称和 security_id",
+            "核验公告原文与业务映射",
+            "删除所有合成示例内容后再运行"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+from a_share_research.cli import main
 
 
 class CliTests(unittest.TestCase):
@@ -87,6 +92,44 @@ class CliTests(unittest.TestCase):
         error = json.loads(run.stderr)
         self.assertEqual(error["market"], "CN")
         self.assertIn("permanently bound", error["message"])
+
+    def test_collect_snapshot_dispatches_seed_and_timezone_aware_retrieval_time(self) -> None:
+        seed_path = self.workspace / "seed.json"
+        seed = {"schema_version": "0.1", "market": "CN", "evidence": [], "themes": []}
+        seed_path.write_text(json.dumps(seed), encoding="utf-8")
+        result = Mock()
+        result.to_dict.return_value = {
+            "schema_version": "0.1",
+            "market": "CN",
+            "snapshot_id": "cn-test",
+        }
+        stdout = io.StringIO()
+
+        with (
+            patch("a_share_research.cli.collect_cn_snapshot", return_value=result) as collect,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "collect-snapshot",
+                    "--seed-json",
+                    str(seed_path),
+                    "--snapshot-id",
+                    "cn-test",
+                    "--retrieved-at",
+                    "2026-08-17T18:00:00+08:00",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["snapshot_id"], "cn-test")
+        call = collect.call_args
+        self.assertEqual(call.args, (seed,))
+        self.assertEqual(call.kwargs["workspace"], self.workspace.resolve())
+        self.assertEqual(call.kwargs["snapshot_id"], "cn-test")
+        self.assertEqual(call.kwargs["retrieved_at"].isoformat(), "2026-08-17T18:00:00+08:00")
 
 
 if __name__ == "__main__":

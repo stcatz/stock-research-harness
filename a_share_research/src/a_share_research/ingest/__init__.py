@@ -17,6 +17,11 @@ from .market_data import (
     collect_cn_market_data,
     normalize_baostock_symbol,
 )
+from .snapshot_builder import (
+    SnapshotCollectionResult,
+    collect_cn_snapshot,
+    validate_research_seed,
+)
 
 __all__ = [
     "BENCHMARK_SYMBOLS",
@@ -28,6 +33,9 @@ __all__ = [
     "InstrumentMarketData",
     "MarketDataCollection",
     "ProviderUnavailableError",
+    "SnapshotCollectionResult",
     "collect_cn_market_data",
+    "collect_cn_snapshot",
     "normalize_baostock_symbol",
+    "validate_research_seed",
 ]
