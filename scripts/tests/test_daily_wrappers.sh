@@ -64,9 +64,15 @@ set -eu
 printf '%s\n' "$*" >>"$MOCK_CALL_LOG"
 
 if [ "${1:-}" = "-c" ]; then
-  json_path=${3:?JSON path is required}
-  field=${4:?JSON field is required}
-  sed -n "s/.*\"$field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$json_path" | head -n 1
+  code=${2:-}
+  case "$code" in
+    *current_decision_time*)
+      printf '%s\n' "${MOCK_CN_NOW:-2026-08-18T20:31:00+08:00}"
+      ;;
+    *)
+      exec python3 "$@"
+      ;;
+  esac
   exit 0
 fi
 
@@ -90,13 +96,16 @@ for argument in "$@"; do
 done
 
 if [ -n "${MOCK_FAIL_STAGE:-}" ] && [ "$command" = "$MOCK_FAIL_STAGE" ]; then
-  printf '{"error":"mock failure"}\n' >&2
+  printf '%s\n' "${MOCK_FAILURE_MESSAGE:-{\"error\":\"mock failure\"}}" >&2
   exit 9
 fi
 
 case "$command" in
   collect-snapshot)
-    printf '{"schema_version":"0.1","market":"CN","status":"published","snapshot_id":"%s","snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' "$snapshot_id"
+    printf '{"schema_version":"0.1","market":"CN","status":"published","snapshot_id":"%s","snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","retrieved_at":"%s","created":%s}\n' \
+      "$snapshot_id" \
+      "${MOCK_CN_RETRIEVED_AT:-2026-08-18T20:30:00+08:00}" \
+      "${MOCK_CN_CREATED:-true}"
     ;;
   collect-sec-snapshot)
     printf '{"schema_version":"0.1","market":"US","status":"published","snapshot_id":"%s","snapshot_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n' "$snapshot_id"
@@ -154,7 +163,7 @@ test_cn_success() {
       --root "$root" \
       --seed-json "$root/seeds/cn.json" \
       --snapshot-id cn-20260818-test \
-      --decision-at 2026-08-18T20:31:00+08:00 \
+      --decision-at 2026-08-18T12:31:00+00:00 \
       >"$root/stdout" 2>"$root/stderr"; then
     sed -n '1,120p' "$root/stderr" >&2
     fail "CN success case failed"
@@ -181,7 +190,9 @@ test_cn_collect_failure_short_circuits() {
   : >"$call_log"
 
   run_expect_failure "$root/stdout" "$root/stderr" \
-    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" MOCK_FAIL_STAGE=collect-snapshot \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" \
+    MOCK_FAIL_STAGE=collect-snapshot \
+    MOCK_FAILURE_MESSAGE='failure at /private/sensitive/research-seed.json token=do-not-log' \
     "$CN_WRAPPER" \
       --root "$root" \
       --seed-json "$root/seeds/cn.json" \
@@ -191,6 +202,8 @@ test_cn_collect_failure_short_circuits() {
   assert_contains 'collect-snapshot' "$call_log"
   assert_not_contains ' run ' "$call_log"
   assert_not_contains 'artifact-read' "$call_log"
+  assert_not_contains '/private/sensitive/research-seed.json' "$root/stderr"
+  assert_not_contains 'do-not-log' "$root/stderr"
   pass "CN collection failure prevents research and artifact publication"
 }
 
@@ -210,6 +223,83 @@ test_cn_lock_rejects_overlap() {
 
   [ ! -s "$call_log" ] || fail "CN overlap must not invoke Python"
   pass "CN mkdir lock rejects overlapping daily runs"
+}
+
+test_cn_rejects_public_retrieved_at_override() {
+  root=$(new_root cn-retrieved-at-override)
+  call_log="$root/calls.log"
+  : >"$call_log"
+
+  run_expect_failure "$root/stdout" "$root/stderr" \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --snapshot-id cn-20260818-test \
+      --retrieved-at 2020-01-01T00:00:00+08:00 \
+      --decision-at 2026-08-18T20:31:00+08:00
+
+  [ ! -s "$call_log" ] || fail "rejected --retrieved-at must not invoke Python"
+  assert_contains 'unknown argument' "$root/stderr"
+  pass "CN wrapper exposes no operator-controlled retrieval timestamp"
+}
+
+test_cn_rejects_decision_before_collection() {
+  root=$(new_root cn-decision-before-collection)
+  call_log="$root/calls.log"
+  : >"$call_log"
+
+  run_expect_failure "$root/stdout" "$root/stderr" \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" \
+    MOCK_CN_RETRIEVED_AT=2026-08-18T20:30:00+08:00 \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --snapshot-id cn-decision-too-early \
+      --decision-at 2026-08-18T20:29:59+08:00
+
+  assert_contains 'collect-snapshot' "$call_log"
+  assert_not_contains ' run ' "$call_log"
+  assert_not_contains 'artifact-read' "$call_log"
+  pass "CN decision_at earlier than canonical collector retrieved_at fails before research"
+}
+
+test_cn_rejects_reused_collection() {
+  root=$(new_root cn-reused-collection)
+  call_log="$root/calls.log"
+  : >"$call_log"
+
+  run_expect_failure "$root/stdout" "$root/stderr" \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" MOCK_CN_CREATED=false \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --snapshot-id cn-reused-collection \
+      --decision-at 2026-08-18T20:31:00+08:00
+
+  assert_contains 'collect-snapshot' "$call_log"
+  assert_not_contains ' run ' "$call_log"
+  assert_not_contains 'artifact-read' "$call_log"
+  pass "CN created=false collector result cannot be presented as a fresh daily report"
+}
+
+test_cn_default_decision_is_also_checked() {
+  root=$(new_root cn-default-decision-too-early)
+  call_log="$root/calls.log"
+  : >"$call_log"
+
+  run_expect_failure "$root/stdout" "$root/stderr" \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" \
+    MOCK_CN_RETRIEVED_AT=2026-08-18T20:30:00+08:00 \
+    MOCK_CN_NOW=2026-08-18T20:29:59+08:00 \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --snapshot-id cn-default-decision-too-early
+
+  assert_contains 'collect-snapshot' "$call_log"
+  assert_not_contains ' run ' "$call_log"
+  pass "CN generated default decision_at is checked against canonical retrieval time"
 }
 
 test_synthetic_seed_markers_are_rejected() {
@@ -376,6 +466,10 @@ test_launchd_installer() {
 test_cn_success
 test_cn_collect_failure_short_circuits
 test_cn_lock_rejects_overlap
+test_cn_rejects_public_retrieved_at_override
+test_cn_rejects_decision_before_collection
+test_cn_rejects_reused_collection
+test_cn_default_decision_is_also_checked
 test_synthetic_seed_markers_are_rejected
 test_us_requires_user_agent
 test_us_success_and_no_secret_logging

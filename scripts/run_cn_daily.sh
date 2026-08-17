@@ -15,7 +15,6 @@ Required:
 
 Options:
   --snapshot-id ID       Immutable snapshot ID (default: generated from local time)
-  --retrieved-at ISO     Override the collector retrieval time
   --decision-at ISO      Override the research cut-off (default: time after collection)
   --top-n N              Number of focus candidates, 1-20 (default: 9)
   -h, --help             Show this help
@@ -34,7 +33,6 @@ die() {
 ROOT_ARGUMENT=
 SEED_ARGUMENT=
 SNAPSHOT_ID=
-RETRIEVED_AT=
 DECISION_AT=
 TOP_N=9
 
@@ -53,11 +51,6 @@ while [ "$#" -gt 0 ]; do
     --snapshot-id)
       [ "$#" -ge 2 ] || die "--snapshot-id requires a value"
       SNAPSHOT_ID=$2
-      shift 2
-      ;;
-    --retrieved-at)
-      [ "$#" -ge 2 ] || die "--retrieved-at requires a value"
-      RETRIEVED_AT=$2
       shift 2
       ;;
     --decision-at)
@@ -127,9 +120,6 @@ validate_timestamp() {
   esac
 }
 
-if [ -n "$RETRIEVED_AT" ]; then
-  validate_timestamp "$RETRIEVED_AT" "--retrieved-at"
-fi
 if [ -n "$DECISION_AT" ]; then
   validate_timestamp "$DECISION_AT" "--decision-at"
 fi
@@ -148,8 +138,11 @@ cleanup() {
   if [ -n "$TMP_DIR" ]; then
     rm -f \
       "$TMP_DIR/collect.json" \
+      "$TMP_DIR/collect.stderr" \
       "$TMP_DIR/run.json" \
-      "$TMP_DIR/report.json"
+      "$TMP_DIR/run.stderr" \
+      "$TMP_DIR/report.json" \
+      "$TMP_DIR/report.stderr"
     rmdir "$TMP_DIR" 2>/dev/null || true
   fi
   rm -f "$LOCK_DIR/pid"
@@ -174,6 +167,59 @@ print(value)' \
     "$json_path" "$field"
 }
 
+canonical_collection_retrieved_at() {
+  json_path=$1
+  "$PYTHON" -c \
+    'from datetime import datetime
+import json
+import pathlib
+import sys
+
+# validate_collection_metadata
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("created") is not True:
+    raise SystemExit(4)
+value = payload.get("retrieved_at")
+if not isinstance(value, str) or not value:
+    raise SystemExit(4)
+try:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(4)
+if parsed.utcoffset() is None:
+    raise SystemExit(4)
+print(parsed.isoformat())' \
+    "$json_path"
+}
+
+current_decision_time() {
+  "$PYTHON" -c \
+    'from datetime import datetime
+
+# current_decision_time
+print(datetime.now().astimezone().isoformat(timespec="microseconds"))'
+}
+
+decision_is_not_before_collection() {
+  decision_at=$1
+  collected_at=$2
+  "$PYTHON" -c \
+    'from datetime import datetime
+import sys
+
+# validate_decision_order
+try:
+    decision = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    collected = datetime.fromisoformat(sys.argv[2].replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(4)
+if decision.utcoffset() is None or collected.utcoffset() is None:
+    raise SystemExit(4)
+if decision < collected:
+    raise SystemExit(4)' \
+    "$decision_at" "$collected_at"
+}
+
 printf 'run_cn_daily: collecting a real normalized snapshot\n' >&2
 COLLECT_ARGUMENTS=(
   --workspace "$ROOT"
@@ -181,10 +227,8 @@ COLLECT_ARGUMENTS=(
   --seed-json "$SEED_JSON"
   --snapshot-id "$SNAPSHOT_ID"
 )
-if [ -n "$RETRIEVED_AT" ]; then
-  COLLECT_ARGUMENTS+=(--retrieved-at "$RETRIEVED_AT")
-fi
-if ! "$PYTHON" -m a_share_research.cli "${COLLECT_ARGUMENTS[@]}" >"$TMP_DIR/collect.json"; then
+if ! "$PYTHON" -m a_share_research.cli "${COLLECT_ARGUMENTS[@]}" \
+    >"$TMP_DIR/collect.json" 2>"$TMP_DIR/collect.stderr"; then
   die "snapshot collection failed; research was not started"
 fi
 
@@ -199,20 +243,25 @@ case "$PUBLISHED_SNAPSHOT_HASH" in
 esac
 [ "${#PUBLISHED_SNAPSHOT_HASH}" -eq 64 ] || \
   die "collector returned an invalid snapshot hash; research was not started"
+COLLECTED_RETRIEVED_AT=$(canonical_collection_retrieved_at "$TMP_DIR/collect.json") || \
+  die "collector did not create a fresh snapshot with canonical retrieval time"
 
 if [ -z "$DECISION_AT" ]; then
-  DECISION_AT=$("$PYTHON" -c \
-    'from datetime import datetime
-print(datetime.now().astimezone().isoformat(timespec="microseconds"))') || \
+  DECISION_AT=$(current_decision_time) || \
     die "could not determine a timezone-aware decision time"
 fi
 validate_timestamp "$DECISION_AT" "--decision-at"
+if ! decision_is_not_before_collection "$DECISION_AT" "$COLLECTED_RETRIEVED_AT"; then
+  die "decision_at cannot be earlier than the collected snapshot retrieval time"
+fi
 
 printf 'run_cn_daily: running daily research against the published snapshot ID\n' >&2
-printf '%s\n' \
-  "{\"schema_version\":\"0.1\",\"market\":\"CN\",\"workflow\":\"daily_report\",\"decision_at\":\"$DECISION_AT\",\"snapshot\":{\"selector\":\"id\",\"snapshot_id\":\"$SNAPSHOT_ID\"},\"top_n\":$TOP_N}" \
-  | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" run --request-json - \
-      >"$TMP_DIR/run.json"
+if ! printf '%s\n' \
+    "{\"schema_version\":\"0.1\",\"market\":\"CN\",\"workflow\":\"daily_report\",\"decision_at\":\"$DECISION_AT\",\"snapshot\":{\"selector\":\"id\",\"snapshot_id\":\"$SNAPSHOT_ID\"},\"top_n\":$TOP_N}" \
+    | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" run --request-json - \
+        >"$TMP_DIR/run.json" 2>"$TMP_DIR/run.stderr"; then
+  die "daily research failed; no report was published"
+fi
 
 RUN_SNAPSHOT_ID=$(extract_json_field "$TMP_DIR/run.json" snapshot_id) || \
   die "research returned no snapshot ID"
@@ -225,9 +274,11 @@ case "$ARTIFACT_ID" in
 esac
 
 printf 'run_cn_daily: reading the complete report artifact\n' >&2
-printf '%s\n' \
-  "{\"artifact_id\":\"$ARTIFACT_ID\",\"section\":\"report\",\"max_chars\":20000}" \
-  | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" artifact-read --request-json - \
-      >"$TMP_DIR/report.json"
+if ! printf '%s\n' \
+    "{\"artifact_id\":\"$ARTIFACT_ID\",\"section\":\"report\",\"max_chars\":20000}" \
+    | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" artifact-read --request-json - \
+        >"$TMP_DIR/report.json" 2>"$TMP_DIR/report.stderr"; then
+  die "artifact read failed; no report was emitted"
+fi
 
 cat "$TMP_DIR/report.json"
