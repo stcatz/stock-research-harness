@@ -1,6 +1,6 @@
 # US Equity Research Engine v0.1
 
-`us_equity_research/` is an offline, auditable US-equity research engine. It consumes point-in-time snapshots, applies deterministic evidence gates and financial calculations, stores immutable artifacts, and renders a cited report. The Python engine is the only canonical writer; the DeepSeek Harness adapter is a thin client that can trigger runs and read bounded artifact sections, but it never rewrites the canonical report.
+`us_equity_research/` is an auditable US-equity research engine. Research runs consume frozen snapshots offline; a separate, explicit SEC collector can build one snapshot from submissions/companyfacts metadata and an operator-reviewed research seed. The Python engine is the only canonical writer; the DeepSeek Harness adapter is a thin client that can trigger runs and read bounded artifact sections, but it never rewrites the canonical report.
 
 ## What v0.1 does
 
@@ -15,9 +15,10 @@
 
 v0.1 is intentionally narrow:
 
-- No network ingestion for SEC, issuer IR, market data, macro, or transcripts.
-- No consensus estimates, transcript licensing, full DCF, target prices, portfolio construction, broker integrations, or scheduled jobs.
-- No promise of production data coverage. Real runs only consume local snapshots that already satisfy the schema.
+- The SEC collector does not parse filing prose and therefore does not claim that researcher-authored bull, bear, risk, or dimension narratives are verified by filing existence alone.
+- No issuer-IR, macro, transcript, consensus-estimate, full DCF, target-price, portfolio-construction, broker, or scheduled-job integration.
+- No bundled market-data license. Price and valuation fields remain `UNKNOWN` unless the operator supplies a separately authorized market JSON.
+- No promise of production data coverage or strict first-public-availability replay. SEC snapshots are conservatively marked `P2`.
 - `demo` uses synthetic issuers and URLs only. Every fixture output stays visibly marked `fixture` / `FIXTURE`.
 
 ## Install and test
@@ -48,6 +49,42 @@ data/normalized/us/<snapshot_id>/snapshot.json
 ```
 
 Raw filings, issuer decks, market-provider responses, API keys, generated reports, and absolute artifact paths are not shipped in Git.
+
+## Collect a real SEC snapshot
+
+The tracked [sec-seed.example.json](config/sec-seed.example.json) is a non-publishable format template. Copy it outside the tracked source tree, remove `example_notice`, set `as_of` to the intended data-observation cutoff, and manually verify every theme and candidate narrative. The collector rejects the tracked example before making a network request.
+
+SEC requires a descriptive `User-Agent` containing a real contact address. It is a request identity, not an API key:
+
+```bash
+cd ~/ai/stock/us_equity_research
+uv sync
+cp config/sec-seed.example.json ~/ai/stock/data/seeds/us-sec-seed.json
+# Edit the copy: remove example_notice, update as_of, and verify all narrative fields.
+
+export SEC_USER_AGENT='stock-research-harness your-real-contact@example.com'
+uv run us-equity-research \
+  --workspace ~/ai/stock \
+  collect-sec-snapshot \
+  --seed-json ~/ai/stock/data/seeds/us-sec-seed.json \
+  --snapshot-id us-20260818-sec-v1
+```
+
+The production CLI always records its own UTC collection clock; it has no public option for relabeling `retrieved_at`. `seed.as_of` limits the observation/reporting period, while the later `decision_at` in each run is the knowledge cutoff. A filing may describe an earlier period but become available later; its `available_at` is preserved so a historical run can exclude it correctly. The collector checks CIK/ticker ownership, handles supported `/A` amendment forms, and keeps annual fiscal-year metrics distinct from TTM metrics.
+
+`--market-json /path/to/market.json` is optional. The payload must explicitly attest `authorized_for_local_research_snapshot`, provide one finite positive `USD/share` close for every candidate, and preserve aligned evidence/fact timestamps. Without it, the snapshot is still valid SEC research input, but market gates and valuation calculations fail closed.
+
+To collect, validate, run by the exact new snapshot ID, and read the complete report in one command:
+
+```bash
+SEC_USER_AGENT='stock-research-harness your-real-contact@example.com' \
+bash ~/ai/stock/scripts/run_us_validation.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/us-sec-seed.json \
+  --snapshot-id us-20260818-validation-v1
+```
+
+This wrapper never calls the demo fixture and has no broker capability. An SEC-only report is expected to return `exclude` or `continue_research` while market evidence and verified narrative mappings are absent; that is the intended fail-closed result.
 
 ## Versioned CLI contracts
 

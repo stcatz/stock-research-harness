@@ -17,7 +17,6 @@ Required:
 
 Options:
   --market-json PATH     Optional licensed/approved structured market-data JSON
-  --retrieved-at ISO     Override the SEC collector retrieval time
   --decision-at ISO      Override the research cut-off (default: time after collection)
   --top-n N              Number of focus candidates, 1-20 (default: 5)
   -h, --help             Show this help
@@ -38,7 +37,6 @@ ROOT_ARGUMENT=
 SEED_ARGUMENT=
 MARKET_ARGUMENT=
 SNAPSHOT_ID=
-RETRIEVED_AT=
 DECISION_AT=
 TOP_N=5
 
@@ -62,11 +60,6 @@ while [ "$#" -gt 0 ]; do
     --snapshot-id)
       [ "$#" -ge 2 ] || die "--snapshot-id requires a value"
       SNAPSHOT_ID=$2
-      shift 2
-      ;;
-    --retrieved-at)
-      [ "$#" -ge 2 ] || die "--retrieved-at requires a value"
-      RETRIEVED_AT=$2
       shift 2
       ;;
     --decision-at)
@@ -145,9 +138,6 @@ validate_timestamp() {
   esac
 }
 
-if [ -n "$RETRIEVED_AT" ]; then
-  validate_timestamp "$RETRIEVED_AT" "--retrieved-at"
-fi
 if [ -n "$DECISION_AT" ]; then
   validate_timestamp "$DECISION_AT" "--decision-at"
 fi
@@ -200,9 +190,6 @@ COLLECT_ARGUMENTS=(
   --seed-json "$SEED_JSON"
   --snapshot-id "$SNAPSHOT_ID"
 )
-if [ -n "$RETRIEVED_AT" ]; then
-  COLLECT_ARGUMENTS+=(--retrieved-at "$RETRIEVED_AT")
-fi
 if [ -n "$MARKET_JSON" ]; then
   COLLECT_ARGUMENTS+=(--market-json "$MARKET_JSON")
 fi

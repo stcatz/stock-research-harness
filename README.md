@@ -71,18 +71,21 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 - 有大小上限的 artifact 读取接口。
 - A 股和美股各自独立的 DeepSeek Harness 薄插件。
 - 远程 Mac 同步脚本与 SSH 端口转发脚本。
+- A 股“研究 seed + BaoStock 日线”的显式单次快照采集器。
+- 美股 SEC submissions/companyfacts 的显式单次快照采集器，并可选导入经过许可声明的行情 JSON。
+- 不依赖 DSH 的 CN 日报、US 验证 wrapper，以及 A 股 macOS <code>launchd</code> 示例。
 
 ### 尚未内置
 
-- 实时行情或公告采集器。
 - 可直接商用的数据供应商账号或 API key。
 - 历史 point-in-time 数据仓库。
-- 自动生成真实 snapshot 的生产 ETL。
-- 定时任务服务。每日调度应由外部 <code>launchd</code>、CI 或其他调度器触发 CLI。
+- A 股公告/政策全文自动发现与结构化、全市场行情宽度和严格 PIT 回放。
+- 美股发行人 IR、官方宏观、transcript 和一致预期采集。
+- 多市场常驻任务服务。当前只提供可审计的单次 wrapper 与 A 股 LaunchAgent 示例。
 - 自动发送邮件、微信、Slack 等发布渠道。
 - 券商连接、订单管理和实盘执行。
 
-换句话说，当前仓库已经实现了“从可信快照到可审计报告”的完整研究链路，但不会替你取得或授权底层数据。
+换句话说，当前仓库已经实现了“受控单次采集 → 可信快照 → 可审计报告”的纵向链路，但不会替你取得商业授权，也不等于完整生产数据平台。
 
 ## 核心设计原则
 
@@ -229,7 +232,7 @@ demo 的 <code>data_mode</code> 必须是 <code>fixture</code>，<code>pit_quali
 
 ## 如何运行每日主题和个股研究
 
-两个 CLI 都支持下面五个子命令：
+两个 CLI 共享下面五个离线子命令：
 
 | 命令 | 用途 | 是否访问网络 |
 |---|---|---|
@@ -238,6 +241,8 @@ demo 的 <code>data_mode</code> 必须是 <code>fixture</code>，<code>pit_quali
 | <code>demo</code> | 使用仓库内合成 fixture 跑通链路 | 否 |
 | <code>run</code> | 运行一份版本化 JSON 研究请求 | 否 |
 | <code>artifact-read</code> | 按 artifact ID 读取一个受限区段 | 否 |
+
+此外，A 股提供联网命令 <code>collect-snapshot</code>，美股提供联网命令 <code>collect-sec-snapshot</code>。它们只负责构建并发布验证通过的不可变 snapshot；<code>run</code> 本身仍然不联网。
 
 全局 <code>--workspace</code> 要放在子命令之前：
 
@@ -827,16 +832,65 @@ http://127.0.0.1:3080
 
 因此浏览器访问本机 <code>127.0.0.1</code>，并不表示 DSH 安装在当前机器上。它只是 SSH 隧道的本地入口。
 
-### 6. 每日调度
+### 6. 真实采集与无 DSH 工作流
 
-本项目不把 DSH session job 当成日报调度器。生产中的正确形态是：
+A 股的研究 seed 保存已经人工核验的政策、公告、题材和候选；采集器只补 BaoStock 不复权日线及三只宽基指数。先复制示例并替换全部合成内容，示例标记未清理时采集器会在联网前拒绝：
 
-1. 外部采集流程先生成并验证当天 snapshot。
-2. macOS <code>launchd</code> 或其他持久调度器调用对应 CLI。
-3. CLI 生成 canonical artifact 和报告。
-4. 你需要查看时，再通过 DSH 读取 artifact。
+~~~bash
+cd ~/ai/stock/a_share_research
+uv sync --extra market
+cp config/research_seed.example.json ~/ai/stock/data/seeds/cn-research-seed.json
+# 编辑副本：删除 example_notice，替换 example.invalid、合成名称和研究结论
 
-这样即使 DSH 暂停或升级失败，日报链路也不会停止。
+uv run a-share-research --workspace ~/ai/stock \
+  collect-snapshot \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --snapshot-id cn-20260818-manual-v1
+~~~
+
+CN 快照固定标记为 <code>RECONSTRUCTED_NON_PIT</code>，不能伪装成严格历史回放。生产 CLI 使用真实系统抓取时间，不允许覆盖 <code>retrieved_at</code>；候选代码和身份也必须一致，例如 <code>600000 ↔ CN.SH.600000</code>。
+
+美股采集器从 SEC submissions 与 companyfacts 获取 filing 元数据和可确定性解析的财务事实。它要求 SEC 合规的 <code>SEC_USER_AGENT</code>，不需要 API key；没有经过许可声明的行情 JSON 时，价格、估值和市场门槛保持 <code>UNKNOWN</code>，候选不会被冒充为可观察结论：
+
+~~~bash
+cd ~/ai/stock/us_equity_research
+uv sync
+cp config/sec-seed.example.json ~/ai/stock/data/seeds/us-sec-seed.json
+# 编辑副本：删除 example 标记，更新数据观察时点，并人工核验所有叙事
+
+export SEC_USER_AGENT='stock-research-harness your-real-contact@example.com'
+uv run us-equity-research --workspace ~/ai/stock \
+  collect-sec-snapshot \
+  --seed-json ~/ai/stock/data/seeds/us-sec-seed.json \
+  --snapshot-id us-20260818-sec-v1
+~~~
+
+两个 wrapper 都按显式 snapshot ID 执行，并最终返回完整 report artifact；它们不依赖 DSH，也不会退回 demo。A 股日报只接受本次新建的 snapshot，且 <code>decision_at</code> 不能早于实际抓取时间：
+
+~~~bash
+bash ~/ai/stock/scripts/run_cn_daily.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json
+
+SEC_USER_AGENT='stock-research-harness your-real-contact@example.com' \
+bash ~/ai/stock/scripts/run_us_validation.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/us-sec-seed.json \
+  --snapshot-id us-20260818-validation-v1
+~~~
+
+### 7. 每日调度
+
+本项目不把 DSH session job 当成日报调度器。A 股已提供工作日 20:30 的 macOS LaunchAgent 安装器：
+
+~~~bash
+bash ~/ai/stock/scripts/install_cn_launchd.sh \
+  --root /Users/yourname/ai/stock \
+  --seed-json /Users/yourname/ai/stock/data/seeds/cn-research-seed.json \
+  --load
+~~~
+
+安装器默认只渲染 plist；只有 <code>--load</code> 才会加载。执行顺序是“采集 → 显式 ID 研究 → canonical artifact → 完整报告”，所以即使 DSH 暂停或升级失败，日报链路也不会停止。美股目前提供单次验证 wrapper，不默认安装定时任务。
 
 ## 数据源和许可证策略
 
@@ -1044,6 +1098,9 @@ stock-research-harness/
 └── scripts/
     ├── deploy_remote.sh
     ├── deploy_us_remote.sh
+    ├── run_cn_daily.sh
+    ├── run_us_validation.sh
+    ├── install_cn_launchd.sh
     ├── open_ssh_tunnel.sh
     └── sync_course_materials.sh
 ~~~
@@ -1061,11 +1118,11 @@ stock-research-harness/
 
 短期优先级：
 
-1. 为 A 股接入官方公告、政策与授权行情的 snapshot builder。
-2. 为美股接入 SEC、发行人 IR、官方宏观与授权行情的 snapshot builder。
+1. 在现有 A 股 seed + BaoStock 采集器上增加官方公告/政策的增量发现、哈希和首次抓取时间。
+2. 在现有 SEC 采集器上增加发行人 IR、官方宏观与经过授权的行情 adapter。
 3. 用真实 forward snapshot 连续生成并盲评日报。
 4. 记录主题和标的后续验证结果，评估研究质量而不是只评估格式正确率。
-5. 增加外部 <code>launchd</code> 示例，但保持调度与 DSH session 解耦。
+5. 加固现有 LaunchAgent 的监控、失败告警和交易日历判断，同时保持调度与 DSH session 解耦。
 6. 在数据授权明确后增加 estimate vintage、transcript 或更多财务字段。
 
 明确不在路线图内：

@@ -140,7 +140,7 @@ uv run a-share-research \
   --snapshot-id "cn-$(date +%Y%m%d)-manual-v1"
 ```
 
-BaoStock 没有不可变的 first-seen/vintage 语义，因此这些快照固定标记为 `RECONSTRUCTED_NON_PIT`。命令不会自动抓取巨潮或政策正文；官方证据仍由研究员在 seed 中提供并负责授权与准确性。
+BaoStock 没有不可变的 first-seen/vintage 语义，因此这些快照固定标记为 `RECONSTRUCTED_NON_PIT`。生产 CLI 始终使用采集时的系统时钟，不提供人为覆盖 `retrieved_at` 的参数。命令不会自动抓取巨潮或政策正文；官方证据仍由研究员在 seed 中提供并负责授权与准确性。
 
 ## 每日完整报告与 macOS 调度
 
@@ -163,7 +163,7 @@ bash ~/ai/stock/scripts/install_cn_launchd.sh \
   --load
 ```
 
-日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
+wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decision_at` 早于实际抓取时间，会在研究运行前失败。日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
 
 ## DeepSeek Harness
 
