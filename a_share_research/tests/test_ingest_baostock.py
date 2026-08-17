@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from unittest.mock import patch
 
@@ -34,18 +36,24 @@ class _QueryResult(_Status):
 
 
 class _Client:
-    def __init__(self, *, login_status: _Status | None = None) -> None:
+    def __init__(self, *, login_status: _Status | None = None, noisy: bool = False) -> None:
         self.login_status = login_status or _Status()
+        self.noisy = noisy
         self.query_arguments: tuple[object, ...] | None = None
         self.query_keywords: dict[str, str] | None = None
 
     def login(self) -> _Status:
+        if self.noisy:
+            print("third-party login noise")
         return self.login_status
 
     def logout(self) -> None:
-        return None
+        if self.noisy:
+            print("third-party logout noise", file=__import__("sys").stderr)
 
     def query_history_k_data_plus(self, *args: object, **kwargs: str) -> _QueryResult:
+        if self.noisy:
+            print("third-party query noise")
         self.query_arguments = args
         self.query_keywords = kwargs
         row = [
@@ -68,6 +76,25 @@ class _Client:
 
 
 class BaoStockProviderTests(unittest.TestCase):
+    def test_adapter_suppresses_third_party_console_output(self) -> None:
+        provider = BaoStockProvider(_Client(noisy=True), version="test-1")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            provider.login()
+            provider.query_daily(
+                "sh.600000",
+                fields=DAILY_FIELDS,
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 14),
+                adjustflag="3",
+            )
+            provider.logout()
+
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_adapter_uses_daily_unadjusted_query_and_maps_rows(self) -> None:
         client = _Client()
         provider = BaoStockProvider(client, version="test-1")
@@ -104,9 +131,10 @@ class BaoStockProviderTests(unittest.TestCase):
 
     def test_missing_optional_package_has_actionable_error(self) -> None:
         missing = ModuleNotFoundError("No module named 'baostock'", name="baostock")
-        with patch(
-            "a_share_research.ingest.baostock.importlib.import_module", side_effect=missing
-        ), self.assertRaisesRegex(ProviderUnavailableError, "uv pip install baostock"):
+        with (
+            patch("a_share_research.ingest.baostock.importlib.import_module", side_effect=missing),
+            self.assertRaisesRegex(ProviderUnavailableError, "uv pip install baostock"),
+        ):
             BaoStockProvider()
 
 

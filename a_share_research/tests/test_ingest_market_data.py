@@ -92,14 +92,18 @@ class MarketDataCollectionTests(unittest.TestCase):
         self.assertEqual(candidate.latest.to_dict()["turn"], "1.2")
 
         fragment = next(
-            item for item in result.evidence_fragments() if item["instrument"]["code"] == self.candidate
+            item
+            for item in result.evidence_fragments()
+            if item["instrument"]["code"] == self.candidate
         )
         self.assertEqual(fragment["source_level"], "structured_market")
         self.assertEqual(fragment["pit_quality"], "RECONSTRUCTED_NON_PIT")
         self.assertEqual(fragment["available_at"], self.retrieved_at.isoformat())
         self.assertEqual(fragment["as_of"], "2026-08-14T15:00:00+08:00")
         self.assertEqual(len(fragment["calculation_window"]), 11)
-        self.assertIn("does not provide an immutable first-seen timestamp", fragment["non_pit_notice"])
+        self.assertIn(
+            "does not provide an immutable first-seen timestamp", fragment["non_pit_notice"]
+        )
 
         context = result.market_context_fragment()
         self.assertIn("UNKNOWN", context["breadth"])

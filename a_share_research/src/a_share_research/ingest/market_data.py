@@ -130,9 +130,7 @@ class InstrumentMarketData:
             "instrument_kind": self.instrument_kind,
             "bars": [bar.to_dict() for bar in self.bars],
             "derived": {
-                "return_10_sessions_pct": _format_decimal(
-                    self.return_10_sessions_pct, places=4
-                ),
+                "return_10_sessions_pct": _format_decimal(self.return_10_sessions_pct, places=4),
                 "return_base_date": self.return_base.trade_date.isoformat(),
                 "average_amount_5_sessions": _format_decimal(
                     self.average_amount_5_sessions, places=2
@@ -300,9 +298,7 @@ def normalize_baostock_symbol(raw_symbol: str) -> str:
     if suffix:
         return f"{suffix.group(2)}.{suffix.group(1)}"
     if not re.fullmatch(r"\d{6}", symbol):
-        raise ValueError(
-            f"unsupported BaoStock symbol {raw_symbol!r}; use sh.600000 or 600000.SH"
-        )
+        raise ValueError(f"unsupported BaoStock symbol {raw_symbol!r}; use sh.600000 or 600000.SH")
     if symbol.startswith("6"):
         return f"sh.{symbol}"
     if symbol.startswith(("0", "3")):
@@ -528,9 +524,7 @@ def _evidence_fragment(
             "average_amount_5_sessions": average_amount,
             "derivation_note": DERIVATION_NOTE,
         },
-        "calculation_window": [
-            bar.to_dict() for bar in instrument.bars[-MINIMUM_ACTIVE_SESSIONS:]
-        ],
+        "calculation_window": [bar.to_dict() for bar in instrument.bars[-MINIMUM_ACTIVE_SESSIONS:]],
         "pit_quality": "RECONSTRUCTED_NON_PIT",
         "non_pit_notice": NON_PIT_NOTICE,
         "coverage_note": (
@@ -558,9 +552,7 @@ def _parse_trade_date(row: Mapping[str, str], code: str, index: int) -> date:
         raise CollectionError(f"{code} row {index} has invalid date={raw!r}") from exc
 
 
-def _required_row_text(
-    row: Mapping[str, str], field: str, code: str, index: int
-) -> str:
+def _required_row_text(row: Mapping[str, str], field: str, code: str, index: int) -> str:
     value = row.get(field)
     if not isinstance(value, str) or not value.strip():
         raise CollectionError(f"{code} row {index} is missing {field}")

@@ -19,7 +19,7 @@
 
 ```bash
 cd ~/ai/stock/a_share_research
-uv sync
+uv sync --extra market
 uv run python -m unittest discover -s tests -v
 ```
 
@@ -123,6 +123,48 @@ printf '%s' '{
 
 CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定。DSH 工具结果只返回相对路径、短摘要和 opaque ID。
 
+## 采集真实 A 股快照
+
+研究引擎运行时仍然只读取冻结 snapshot；联网发生在显式的 `collect-snapshot` 命令中。该命令把研究员维护的政策、公告、题材和候选 seed，与 BaoStock 不复权日线合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。
+
+先复制 [research_seed.example.json](config/research_seed.example.json)，删除 `example_notice`，并把所有合成名称、URL、结论和人工复核项换成你已核验的真实内容。示例文件和仍含 `example.invalid`、`EXAMPLE_ONLY`、`[合成示例]` 等标记的副本会被采集器拒绝；seed 也不能预填行情或 `market_evidence_refs`。候选身份必须满足例如 `symbol=600000` 对应 `security_id=CN.SH.600000`。
+
+```bash
+cd ~/ai/stock/a_share_research
+uv sync --extra market
+
+uv run a-share-research \
+  --workspace ~/ai/stock \
+  collect-snapshot \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --snapshot-id "cn-$(date +%Y%m%d)-manual-v1"
+```
+
+BaoStock 没有不可变的 first-seen/vintage 语义，因此这些快照固定标记为 `RECONSTRUCTED_NON_PIT`。命令不会自动抓取巨潮或政策正文；官方证据仍由研究员在 seed 中提供并负责授权与准确性。
+
+## 每日完整报告与 macOS 调度
+
+仓库根目录的 wrapper 会严格按“采集真实快照 → 使用显式 snapshot ID 运行 → 读取完整 report artifact”执行，不依赖 DSH，也不会退回 demo：
+
+```bash
+bash ~/ai/stock/scripts/run_cn_daily.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --snapshot-id "cn-$(date +%Y%m%d)-daily-v1" \
+  --top-n 9
+```
+
+在 macOS 上可安装工作日 20:30 的 LaunchAgent。默认只写 plist；只有显式传入 `--load` 才会加载：
+
+```bash
+bash ~/ai/stock/scripts/install_cn_launchd.sh \
+  --root /Users/yourname/ai/stock \
+  --seed-json /Users/yourname/ai/stock/data/seeds/cn-research-seed.json \
+  --load
+```
+
+日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
+
 ## DeepSeek Harness
 
 插件位于 `adapter-pkg/`，只注册：
@@ -134,6 +176,6 @@ CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定
 
 ## 当前边界
 
-v0.1 默认不联网，也不抓取全市场。它先验证 schema、证据门槛、报告质量和 DSH 适配是否可靠。接入巨潮、交易所、Tushare 或商业行情前，需要逐一确认授权、时间语义和快照策略。
+`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 会联网访问 BaoStock。当前采集器只补候选和三只宽基指数的日线，不提供全市场宽度、公告抓取、严格 PIT、自动主题发现或生产级授权行情。接入巨潮、交易所、Tushare 或商业行情前，需要逐一确认授权、时间语义和快照策略。
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。

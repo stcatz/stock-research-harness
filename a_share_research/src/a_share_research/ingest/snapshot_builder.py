@@ -5,11 +5,13 @@ import json
 import os
 import re
 import secrets
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..core.contracts import (
     MARKET,
@@ -20,7 +22,7 @@ from ..core.contracts import (
     require_string,
 )
 from ..core.snapshot import validate_snapshot
-from ..core.utils import read_json, sha256_value
+from ..core.utils import sha256_value
 from .market_data import (
     SHANGHAI_TZ,
     CollectionError,
@@ -37,6 +39,11 @@ _GENERATED_SEED_FIELDS = {
     "retrieved_at",
     "snapshot_id",
 }
+_SYNTHETIC_TEXT_MARKERS = (
+    "[合成示例]",
+    "example_only",
+    "synthetic format example",
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,7 @@ def collect_cn_snapshot(
     deterministic tests; production lazily constructs the optional BaoStock adapter.
     """
 
+    _reject_synthetic_publication_seed(seed)
     normalized_seed, candidate_symbols = _validate_and_copy_seed(seed)
     resolved_workspace = Path(workspace).expanduser().resolve()
     target = _preflight_output_target(resolved_workspace, snapshot_id)
@@ -150,9 +158,7 @@ def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tu
     themes = require_list(data.get("themes"), "seed.themes")
     for theme_index, raw_theme in enumerate(themes):
         theme = require_mapping(raw_theme, f"seed.themes[{theme_index}]")
-        candidates = require_list(
-            theme.get("candidates"), f"seed.themes[{theme_index}].candidates"
-        )
+        candidates = require_list(theme.get("candidates"), f"seed.themes[{theme_index}].candidates")
         for candidate_index, raw_candidate in enumerate(candidates):
             prefix = f"seed.themes[{theme_index}].candidates[{candidate_index}]"
             candidate = require_mapping(raw_candidate, prefix)
@@ -162,15 +168,53 @@ def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tu
                     "research seed candidate market_evidence_refs must be absent or empty"
                 )
             symbol = require_string(candidate.get("symbol"), f"{prefix}.symbol")
-            candidate_symbols.append(normalize_baostock_symbol(symbol))
+            normalized_symbol = normalize_baostock_symbol(symbol)
+            security_id = require_string(candidate.get("security_id"), f"{prefix}.security_id")
+            expected_security_id = _security_id_for_baostock_symbol(normalized_symbol)
+            if security_id != expected_security_id:
+                raise CollectionError(
+                    f"{prefix}.security_id must be {expected_security_id} for symbol {symbol}"
+                )
+            candidate_symbols.append(normalized_symbol)
     if not candidate_symbols:
         raise CollectionError("research seed must contain at least one candidate")
     return data, tuple(candidate_symbols)
 
 
-def _assemble_snapshot(
-    seed: dict[str, Any], snapshot_id: str, collection: Any
-) -> dict[str, Any]:
+def _reject_synthetic_publication_seed(seed: Mapping[str, Any]) -> None:
+    data = require_mapping(seed, "seed")
+    synthetic_markers = sorted(
+        marker for marker in ("example_notice", "fixture_notice") if marker in data
+    )
+    if synthetic_markers:
+        raise CollectionError(
+            "synthetic example or fixture seeds cannot publish real snapshots: "
+            + ", ".join(synthetic_markers)
+        )
+    if _contains_synthetic_text(data):
+        raise CollectionError("synthetic example content cannot publish a real snapshot")
+    for index, raw_evidence in enumerate(require_list(data.get("evidence"), "seed.evidence")):
+        item = require_mapping(raw_evidence, f"seed.evidence[{index}]")
+        source_url = require_string(item.get("source_url"), f"seed.evidence[{index}].source_url")
+        hostname = (urlsplit(source_url).hostname or "").casefold()
+        if hostname == "invalid" or hostname.endswith(".invalid"):
+            raise CollectionError(
+                f"seed.evidence[{index}] uses a reserved synthetic invalid source URL"
+            )
+
+
+def _contains_synthetic_text(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = value.casefold()
+        return any(marker in normalized for marker in _SYNTHETIC_TEXT_MARKERS)
+    if isinstance(value, Mapping):
+        return any(_contains_synthetic_text(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_synthetic_text(item) for item in value)
+    return False
+
+
+def _assemble_snapshot(seed: dict[str, Any], snapshot_id: str, collection: Any) -> dict[str, Any]:
     market_fragments = collection.evidence_fragments()
     candidate_market_refs = {
         fragment["instrument"]["code"]: fragment["evidence_id"]
@@ -187,7 +231,9 @@ def _assemble_snapshot(
             try:
                 market_ref = candidate_market_refs[code]
             except KeyError as exc:
-                raise CollectionError(f"collector returned no candidate market evidence for {code}") from exc
+                raise CollectionError(
+                    f"collector returned no candidate market evidence for {code}"
+                ) from exc
             candidate["market_evidence_refs"] = [market_ref]
             candidates.append(candidate)
         theme["candidates"] = candidates
@@ -216,10 +262,10 @@ def _preflight_output_target(workspace: Path, snapshot_id: str) -> Path:
     target_directory = normalized_root / snapshot_id
     for path in (data_root, normalized_root, target_directory):
         if path.is_symlink():
-            raise CollectionError(f"snapshot output path must not be a symbolic link: {path}")
+            raise CollectionError("snapshot output path must not be a symbolic link")
     target = target_directory / "snapshot.json"
     if target.is_symlink():
-        raise CollectionError(f"snapshot output path must not be a symbolic link: {target}")
+        raise CollectionError("snapshot output path must not be a symbolic link")
     if normalized_root.exists() and normalized_root.resolve() != normalized_root:
         raise CollectionError("normalized snapshot path escapes the workspace")
     if target_directory.exists() and target_directory.resolve() != target_directory:
@@ -228,98 +274,171 @@ def _preflight_output_target(workspace: Path, snapshot_id: str) -> Path:
 
 
 def _persist_without_overwrite(target: Path, workspace: Path, snapshot: dict[str, Any]) -> bool:
-    _ensure_output_parents(workspace, target.parent.parent)
-    if target.parent.exists():
-        return _compare_existing_snapshot(target, snapshot)
+    if os.name != "posix":
+        raise CollectionError("snapshot publication requires a POSIX filesystem")
 
-    try:
-        target.parent.mkdir(mode=0o700)
-    except FileExistsError:
-        return _compare_existing_snapshot(target, snapshot)
-    if target.parent.is_symlink() or target.parent.resolve() != target.parent:
-        target.parent.rmdir()
-        raise CollectionError("snapshot target became a symbolic link or escaped the workspace")
-
-    temporary = target.parent / f".snapshot.{secrets.token_hex(8)}.tmp"
-    serialized = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor: int | None = None
+    snapshot_id = target.parent.name
+    temporary_name = f".snapshot.{secrets.token_hex(8)}.tmp"
+    serialized = (json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    workspace_fd: int | None = None
+    data_fd: int | None = None
+    normalized_fd: int | None = None
+    snapshot_fd: int | None = None
+    file_fd: int | None = None
+    created_directory = False
+    linked_target = False
     published = False
     try:
-        descriptor = os.open(temporary, flags, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor = None
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary, target, follow_symlinks=False)
+        workspace.mkdir(parents=True, exist_ok=True)
+        workspace_fd = _open_directory(workspace)
+        data_fd = _open_or_create_directory(workspace_fd, "data")
+        normalized_fd = _open_or_create_directory(data_fd, "normalized")
+
         try:
-            _fsync_directory(target.parent)
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+            os.mkdir(snapshot_id, mode=0o700, dir_fd=normalized_fd)
+            created_directory = True
+            _fsync_directory(normalized_fd)
+        except FileExistsError:
+            snapshot_fd = _open_child_directory(normalized_fd, snapshot_id)
+            return _compare_existing_snapshot(snapshot_fd, snapshot)
+
+        snapshot_fd = _open_child_directory(normalized_fd, snapshot_id)
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_CLOEXEC"):
+            file_flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            file_flags |= os.O_NOFOLLOW
+        file_fd = os.open(temporary_name, file_flags, 0o600, dir_fd=snapshot_fd)
+        written = 0
+        while written < len(serialized):
+            count = os.write(file_fd, serialized[written:])
+            if count <= 0:
+                raise OSError("snapshot write made no progress")
+            written += count
+        os.fsync(file_fd)
+        os.close(file_fd)
+        file_fd = None
+        os.link(
+            temporary_name,
+            "snapshot.json",
+            src_dir_fd=snapshot_fd,
+            dst_dir_fd=snapshot_fd,
+            follow_symlinks=False,
+        )
+        linked_target = True
+        _fsync_directory(snapshot_fd)
         published = True
         return True
     except FileExistsError as exc:
-        raise CollectionError(f"snapshot output already exists: {target}") from exc
+        raise CollectionError("snapshot output already exists") from exc
+    except CollectionError:
+        raise
+    except OSError as exc:
+        raise CollectionError("snapshot filesystem operation failed") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if snapshot_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=snapshot_fd)
+            except OSError:
+                pass
+        if created_directory and not published and normalized_fd is not None:
+            if linked_target and snapshot_fd is not None:
+                try:
+                    os.unlink("snapshot.json", dir_fd=snapshot_fd)
+                    _fsync_directory(snapshot_fd)
+                except OSError:
+                    pass
+            if snapshot_fd is not None:
+                os.close(snapshot_fd)
+                snapshot_fd = None
+            try:
+                os.rmdir(snapshot_id, dir_fd=normalized_fd)
+                _fsync_directory(normalized_fd)
+            except OSError:
+                pass
+        for descriptor in (snapshot_fd, normalized_fd, data_fd, workspace_fd):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def _compare_existing_snapshot(snapshot_fd: int, snapshot: dict[str, Any]) -> bool:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor: int | None = None
+    try:
+        descriptor = os.open("snapshot.json", flags, dir_fd=snapshot_fd)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CollectionError("existing snapshot is not a regular file")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            existing = json.load(handle)
+    except CollectionError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CollectionError("existing snapshot cannot be read safely") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-        if not published:
-            try:
-                target.parent.rmdir()
-            except OSError:
-                pass
-
-
-def _ensure_output_parents(workspace: Path, normalized_root: Path) -> None:
-    workspace.mkdir(parents=True, exist_ok=True)
-    if workspace.is_symlink() or not workspace.is_dir():
-        raise CollectionError("workspace must be a real directory")
-    current = workspace
-    for name in ("data", "normalized"):
-        current = current / name
-        if current.is_symlink():
-            raise CollectionError(f"snapshot output path must not be a symbolic link: {current}")
-        current.mkdir(exist_ok=True)
-        if not current.is_dir() or current.resolve() != current:
-            raise CollectionError(f"snapshot output path escapes the workspace: {current}")
-    if current != normalized_root:
-        raise CollectionError("normalized snapshot path does not match the workspace")
-
-
-def _compare_existing_snapshot(target: Path, snapshot: dict[str, Any]) -> bool:
-    if target.parent.is_symlink():
-        raise CollectionError(f"snapshot output path must not be a symbolic link: {target.parent}")
-    if not target.parent.is_dir():
-        raise CollectionError(f"snapshot target is not a directory: {target.parent}")
-    if target.is_symlink():
-        raise CollectionError(f"snapshot output path must not be a symbolic link: {target}")
-    if not target.is_file():
-        raise CollectionError(f"snapshot target directory already exists without snapshot.json: {target}")
-    try:
-        existing = read_json(target)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CollectionError(f"existing snapshot cannot be read safely: {target}") from exc
     if sha256_value(existing) != sha256_value(snapshot):
-        raise CollectionError(
-            f"refusing to overwrite snapshot_id with different content: {target.parent.name}"
-        )
+        raise CollectionError("refusing to overwrite snapshot_id with different content")
     return False
 
 
-def _fsync_directory(path: Path) -> None:
+def _open_directory(path: Path) -> int:
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags)
-    try:
-        os.fsync(descriptor)
-    finally:
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
         os.close(descriptor)
+        raise CollectionError("workspace must be a real directory")
+    return descriptor
+
+
+def _open_child_directory(parent_fd: int, name: str) -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as exc:
+        raise CollectionError("snapshot directory is unsafe") from exc
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise CollectionError("snapshot directory is unsafe")
+    return descriptor
+
+
+def _open_or_create_directory(parent_fd: int, name: str) -> int:
+    try:
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        _fsync_directory(parent_fd)
+    except FileExistsError:
+        pass
+    return _open_child_directory(parent_fd, name)
+
+
+def _fsync_directory(descriptor: int) -> None:
+    os.fsync(descriptor)
+
+
+def _security_id_for_baostock_symbol(normalized_symbol: str) -> str:
+    exchange, symbol = normalized_symbol.split(".", 1)
+    return f"CN.{exchange.upper()}.{symbol}"
 
 
 def _is_safe_identifier(value: str) -> bool:

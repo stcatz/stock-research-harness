@@ -90,7 +90,7 @@
       ],
       "candidates": [
         {
-          "security_id": "CN.EXAMPLE.600000",
+          "security_id": "CN.SH.600000",
           "symbol": "600000",
           "name": "[合成示例] 请替换候选公司",
           "role": "core",

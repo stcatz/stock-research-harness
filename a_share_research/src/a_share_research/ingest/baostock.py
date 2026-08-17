@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import io
 from collections.abc import Mapping, Sequence
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
 from importlib import metadata
 from typing import Any
@@ -22,7 +24,7 @@ class BaoStockProvider:
 
     def login(self) -> None:
         try:
-            result = self._client.login()
+            result = self._call_silently(self._client.login)
         except Exception as exc:
             raise CollectionError(f"BaoStock login raised an exception: {exc}") from exc
         self._require_success(result, "login")
@@ -33,7 +35,7 @@ class BaoStockProvider:
             return
         self._logged_in = False
         try:
-            result = self._client.logout()
+            result = self._call_silently(self._client.logout)
         except Exception as exc:
             raise CollectionError(f"BaoStock logout raised an exception: {exc}") from exc
         # Older clients do not document a logout return contract.  Validate a status when one
@@ -53,7 +55,8 @@ class BaoStockProvider:
         if not self._logged_in:
             raise CollectionError("BaoStock query attempted before a successful login")
         try:
-            result = self._client.query_history_k_data_plus(
+            result = self._call_silently(
+                self._client.query_history_k_data_plus,
                 code,
                 ",".join(fields),
                 start_date=start_date.isoformat(),
@@ -89,9 +92,7 @@ class BaoStockProvider:
             try:
                 values = result.get_row_data()
             except Exception as exc:
-                raise CollectionError(
-                    f"BaoStock row decoding failed for {code}: {exc}"
-                ) from exc
+                raise CollectionError(f"BaoStock row decoding failed for {code}: {exc}") from exc
             if not isinstance(values, (list, tuple)) or len(values) != len(normalized_fields):
                 raise CollectionError(f"BaoStock query {code} returned a malformed row")
             rows.append(dict(zip(normalized_fields, (str(value) for value in values), strict=True)))
@@ -127,3 +128,10 @@ class BaoStockProvider:
             raise CollectionError(
                 f"BaoStock {operation} failed: error_code={code!r}, error_msg={message!r}"
             )
+
+    @staticmethod
+    def _call_silently(function: Any, *args: Any, **kwargs: Any) -> Any:
+        """Keep third-party console chatter out of the CLI's canonical JSON channel."""
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return function(*args, **kwargs)

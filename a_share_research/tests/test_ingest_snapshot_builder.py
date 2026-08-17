@@ -63,9 +63,7 @@ class SnapshotBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.workspace = Path(self.temporary.name)
-        self.retrieved_at = datetime(
-            2026, 8, 17, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai")
-        )
+        self.retrieved_at = datetime(2026, 8, 17, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         sessions = _weekdays(date(2026, 7, 31), count=12)
         self.assertEqual(sessions[-1], date(2026, 8, 17))
         self.rows = {
@@ -111,9 +109,7 @@ class SnapshotBuilderTests(unittest.TestCase):
         evidence = {item["evidence_id"]: item for item in raw["evidence"]}
         self.assertEqual(evidence[market_ref]["source_level"], "structured_market")
         self.assertEqual(len(raw["market_context"]["evidence_refs"]), 3)
-        self.assertTrue(
-            all(ref in evidence for ref in raw["market_context"]["evidence_refs"])
-        )
+        self.assertTrue(all(ref in evidence for ref in raw["market_context"]["evidence_refs"]))
 
     def test_same_content_is_idempotent_but_different_content_cannot_overwrite(self) -> None:
         seed = _research_seed()
@@ -173,6 +169,75 @@ class SnapshotBuilderTests(unittest.TestCase):
             (self.workspace / "data" / "normalized" / "rejected" / "snapshot.json").exists()
         )
 
+    def test_rejects_example_or_fixture_seed_before_calling_provider(self) -> None:
+        for marker in ("example_notice", "fixture_notice"):
+            with self.subTest(marker=marker):
+                seed = _research_seed()
+                seed[marker] = "synthetic content"
+                provider = FakeProvider(self.rows)
+
+                with self.assertRaisesRegex(CollectionError, "synthetic|example|fixture"):
+                    collect_cn_snapshot(
+                        seed,
+                        workspace=self.workspace,
+                        snapshot_id=f"rejected-{marker}",
+                        retrieved_at=self.retrieved_at,
+                        provider=provider,
+                    )
+
+                self.assertFalse(provider.login_called)
+
+    def test_rejects_nested_synthetic_markers_even_if_top_level_notice_is_removed(self) -> None:
+        example_path = Path(__file__).parents[1] / "config" / "research_seed.example.json"
+        seed = json.loads(example_path.read_text(encoding="utf-8"))
+        seed.pop("example_notice")
+        for evidence in seed["evidence"]:
+            evidence["source_url"] = "https://www.cninfo.com.cn/operator-must-replace"
+        provider = FakeProvider(self.rows)
+
+        with self.assertRaisesRegex(CollectionError, "synthetic example content"):
+            collect_cn_snapshot(
+                seed,
+                workspace=self.workspace,
+                snapshot_id="renamed-example",
+                retrieved_at=self.retrieved_at,
+                provider=provider,
+            )
+
+        self.assertFalse(provider.login_called)
+
+    def test_rejects_reserved_invalid_source_urls_before_calling_provider(self) -> None:
+        seed = _research_seed()
+        seed["evidence"][0]["source_url"] = "https://policy.example.invalid/synthetic"
+        provider = FakeProvider(self.rows)
+
+        with self.assertRaisesRegex(CollectionError, "synthetic|invalid source"):
+            collect_cn_snapshot(
+                seed,
+                workspace=self.workspace,
+                snapshot_id="rejected-invalid-source",
+                retrieved_at=self.retrieved_at,
+                provider=provider,
+            )
+
+        self.assertFalse(provider.login_called)
+
+    def test_rejects_security_id_that_does_not_match_candidate_symbol(self) -> None:
+        seed = _research_seed()
+        seed["themes"][0]["candidates"][0]["security_id"] = "CN.SH.999999"
+        provider = FakeProvider(self.rows)
+
+        with self.assertRaisesRegex(CollectionError, "security_id must be CN.SH.600000"):
+            collect_cn_snapshot(
+                seed,
+                workspace=self.workspace,
+                snapshot_id="rejected-identity-mismatch",
+                retrieved_at=self.retrieved_at,
+                provider=provider,
+            )
+
+        self.assertFalse(provider.login_called)
+
     def test_validation_failure_does_not_leave_a_latest_candidate(self) -> None:
         seed = _research_seed()
         seed["themes"][0]["evidence_refs"] = ["UNKNOWN-EVIDENCE"]
@@ -195,7 +260,7 @@ class SnapshotBuilderTests(unittest.TestCase):
                 "a_share_research.ingest.snapshot_builder._fsync_directory",
                 side_effect=OSError("simulated fsync failure"),
             ),
-            self.assertRaisesRegex(OSError, "simulated fsync failure"),
+            self.assertRaisesRegex(CollectionError, "filesystem operation failed"),
         ):
             collect_cn_snapshot(
                 _research_seed(),
@@ -279,6 +344,13 @@ def _research_seed() -> dict[str, Any]:
         for item in demo["evidence"]
         if item["evidence_id"] in {"EV-POLICY-001", "EV-COMPANY-001", "EV-INDUSTRY-001"}
     ]
+    source_urls = {
+        "EV-POLICY-001": "https://www.ndrc.gov.cn/test-policy",
+        "EV-COMPANY-001": "https://www.cninfo.com.cn/test-company",
+        "EV-INDUSTRY-001": "https://www.stats.gov.cn/test-industry",
+    }
+    for item in evidence:
+        item["source_url"] = source_urls[item["evidence_id"]]
     theme = copy.deepcopy(demo["themes"][0])
     theme["evidence_refs"] = ["EV-POLICY-001", "EV-INDUSTRY-001"]
     theme["dimensions"]["many"]["evidence_refs"] = ["EV-INDUSTRY-001"]

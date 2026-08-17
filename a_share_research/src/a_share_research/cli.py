@@ -124,7 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "schema_version": SCHEMA_VERSION,
                     "market": "CN",
                     "error": type(exc).__name__,
-                    "message": str(exc),
+                    "message": _safe_error_message(exc),
                 },
                 ensure_ascii=False,
             ),
@@ -151,6 +151,12 @@ def _read_json(value: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ContractError("request JSON root must be an object")
     return raw
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    if isinstance(exc, OSError):
+        return "filesystem operation failed"
+    return str(exc)
 
 
 if __name__ == "__main__":

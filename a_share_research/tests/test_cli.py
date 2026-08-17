@@ -131,6 +131,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(call.kwargs["snapshot_id"], "cn-test")
         self.assertEqual(call.kwargs["retrieved_at"].isoformat(), "2026-08-17T18:00:00+08:00")
 
+    def test_cli_redacts_filesystem_error_paths(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            patch(
+                "a_share_research.cli.collect_cn_snapshot",
+                side_effect=OSError(f"cannot write {self.workspace}/private/snapshot.json"),
+            ),
+            redirect_stdout(stdout),
+            patch("sys.stderr", stderr),
+        ):
+            exit_code = main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "collect-snapshot",
+                    "--seed-json",
+                    str(self.workspace / "missing-seed.json"),
+                    "--snapshot-id",
+                    "cn-test",
+                ]
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        error = json.loads(stderr.getvalue())
+        self.assertEqual(error["message"], "filesystem operation failed")
+        self.assertNotIn(str(self.workspace), stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
