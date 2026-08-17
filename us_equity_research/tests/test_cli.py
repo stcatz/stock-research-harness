@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from us_equity_research.cli import main
 
 
 class CliTests(unittest.TestCase):
@@ -135,6 +139,74 @@ class CliTests(unittest.TestCase):
         self.assertEqual(error["message"], "filesystem operation failed")
         self.assertNotIn(str(private_path), run.stderr)
         self.assertNotIn(str(self.workspace), run.stderr)
+
+    def test_collect_sec_snapshot_cli_forwards_explicit_inputs(self) -> None:
+        seed_path = self.workspace / "seed.json"
+        market_path = self.workspace / "market.json"
+        seed_path.write_text("{}", encoding="utf-8")
+        market_path.write_text("{}", encoding="utf-8")
+        expected = {
+            "schema_version": "0.1",
+            "market": "US",
+            "status": "published",
+            "snapshot_id": "golden-us-1",
+        }
+        with (
+            patch("us_equity_research.cli.collect_sec_snapshot", return_value=expected) as collect,
+            patch("us_equity_research.cli._write_json") as write_json,
+        ):
+            status = main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "collect-sec-snapshot",
+                    "--seed-json",
+                    str(seed_path),
+                    "--snapshot-id",
+                    "golden-us-1",
+                    "--retrieved-at",
+                    "2026-08-18T12:00:00+00:00",
+                    "--market-json",
+                    str(market_path),
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        collect.assert_called_once_with(
+            workspace=self.workspace.resolve(),
+            seed_path=seed_path,
+            snapshot_id="golden-us-1",
+            retrieved_at="2026-08-18T12:00:00+00:00",
+            market_path=market_path,
+        )
+        write_json.assert_called_once_with(expected)
+
+    def test_collect_sec_snapshot_requires_sec_user_agent(self) -> None:
+        seed_path = self.workspace / "seed.json"
+        seed_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.1",
+                    "market": "US",
+                    "as_of": "2026-08-18T11:00:00+00:00",
+                    "themes": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"SEC_USER_AGENT": ""}):
+            run = self._run_cli(
+                "collect-sec-snapshot",
+                "--seed-json",
+                str(seed_path),
+                "--snapshot-id",
+                "missing-user-agent",
+                "--retrieved-at",
+                "2026-08-18T12:00:00+00:00",
+            )
+        self.assertEqual(run.returncode, 2)
+        error = json.loads(run.stderr)
+        self.assertIn("SEC_USER_AGENT", error["message"])
 
     def _run_cli(
         self, *args: str, input_text: str | None = None

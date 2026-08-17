@@ -1,0 +1,65 @@
+{
+  "schema_version": "0.1",
+  "market": "US",
+  "as_of": "2026-08-17T20:00:00+00:00",
+  "themes": [
+    {
+      "theme_id": "theme-cloud-capex",
+      "name": "Cloud infrastructure capital cycle",
+      "event_type": "filing_update",
+      "stage": "confirming",
+      "dimensions": {
+        "materiality": {
+          "assessment": "medium",
+          "reason": "Test whether reported infrastructure investment is large enough to affect issuer economics."
+        },
+        "novelty": {
+          "assessment": "unknown",
+          "reason": "The SEC collector does not measure whether the market has already priced the thesis."
+        },
+        "breadth": {
+          "assessment": "unknown",
+          "reason": "A licensed market cohort snapshot is required to measure breadth."
+        },
+        "durability": {
+          "assessment": "medium",
+          "reason": "Multi-period filings can test persistence, but the narrative still needs filing-text review."
+        },
+        "timeliness": {
+          "assessment": "unknown",
+          "reason": "SEC acceptance timestamps receive a conservative availability buffer and do not prove market timing."
+        }
+      },
+      "transmission_chain": [
+        "Customer compute demand expands.",
+        "Cloud platforms increase infrastructure deployment.",
+        "Utilization and product mix may affect issuer cash generation."
+      ],
+      "next_catalyst_at": "2026-10-30T20:00:00+00:00",
+      "data_gaps": [
+        "Licensed price, breadth, rates, and liquidity evidence must be supplied separately."
+      ],
+      "candidates": [
+        {
+          "security_id": "US.MSFT",
+          "symbol": "MSFT",
+          "name": "Microsoft Corporation",
+          "cik": "0000789019",
+          "role": "platform",
+          "thesis": "Cloud infrastructure demand may support durable platform economics, subject to filing-level verification.",
+          "bull_case": "Reported revenue, operating income, and cash generation may confirm operating leverage.",
+          "bear_case": "Capital intensity or slower workload conversion may offset demand growth.",
+          "risk_verdict": "Do not advance the thesis until the filing text, current TTM bridge, and licensed market evidence are reviewed.",
+          "invalidation_conditions": [
+            "Revenue and operating cash generation fail to support the infrastructure-demand hypothesis."
+          ],
+          "data_gaps": [],
+          "risk_flags": [],
+          "manual_review_items": [
+            "Read the linked filing and verify every narrative statement against issuer disclosure."
+          ]
+        }
+      ]
+    }
+  ]
+}

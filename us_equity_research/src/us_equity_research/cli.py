@@ -11,6 +11,7 @@ from typing import Any
 from .core.contracts import MARKET, SCHEMA_VERSION, ContractError
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.storage import initialize_workspace
+from .ingest.sec import collect_sec_snapshot
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +27,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("init", help="Create the US SQLite database and runtime directories")
     subparsers.add_parser("doctor", help="Check the offline US research runtime")
+
+    collect_parser = subparsers.add_parser(
+        "collect-sec-snapshot",
+        help="Build one immutable US snapshot from SEC JSON and an explicit research seed",
+    )
+    collect_parser.add_argument("--seed-json", required=True, help="Research seed JSON path")
+    collect_parser.add_argument("--snapshot-id", required=True, help="Immutable snapshot ID")
+    collect_parser.add_argument(
+        "--retrieved-at",
+        help="Timezone-aware retrieval timestamp; defaults to current UTC time",
+    )
+    collect_parser.add_argument(
+        "--market-json",
+        help="Optional BYOK licensed structured-market JSON path",
+    )
 
     run_parser = subparsers.add_parser("run", help="Run a versioned JSON research request")
     run_parser.add_argument(
@@ -60,11 +76,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             result: dict[str, Any] = initialize_workspace(workspace)
         elif args.command == "doctor":
             result = doctor(workspace)
+        elif args.command == "collect-sec-snapshot":
+            result = collect_sec_snapshot(
+                workspace=workspace,
+                seed_path=Path(args.seed_json),
+                snapshot_id=args.snapshot_id,
+                retrieved_at=args.retrieved_at,
+                market_path=Path(args.market_json) if args.market_json else None,
+            )
         elif args.command == "run":
             result = run_research(_read_json(args.request_json), workspace)
         elif args.command == "artifact-read":
             result = read_artifact(_read_json(args.request_json), workspace)
-        else:
+        elif args.command == "demo":
             result = run_research(
                 {
                     "schema_version": SCHEMA_VERSION,
@@ -76,6 +100,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 workspace,
             )
+        else:  # pragma: no cover - argparse enforces the command choices
+            raise RuntimeError("unsupported command")
     except (
         ContractError,
         KeyError,
