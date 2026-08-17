@@ -16,12 +16,13 @@
 - `cn_research_run`
   - `workflow`: `daily_report | stock_research | theme_research`
   - `decision_at`: 带时区 ISO-8601 时间
-  - `snapshot`: `{ selector: demo | latest | id, snapshot_id?: string }`
-    - `snapshot_id` 只能与 `selector: id` 同时使用，且此时必填。
+  - DSH 模型可见的 `snapshot`: `{ selector: latest | id, id?: string }`。真实研究使用 `latest` 或 `id`；`demo` 仅保留在底层 bridge 中用于安装测试，不向模型暴露。
+    - `id` 只能与 `selector: id` 同时使用，且此时必填。
   - `subject?`, `symbol?`, `top_n?`
 - `cn_artifact_read`
   - `artifact_id`
   - `section?`: `summary | report | manifest | packet`
+    - 用户要求完整报告时必须读取 `report`；`summary` 只是紧凑预览，不能当作完整报告返回。
   - `max_chars?`
 
 本包包含：

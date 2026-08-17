@@ -721,7 +721,7 @@ export async function readArtifact(args, options = {}) {
 }
 const researchTool = defineTool({
     name: 'us_research_run',
-    description: 'Run the canonical, research-only US equity workflow through the Python CLI.',
+    description: 'Run a real, research-only US equity workflow from a normalized snapshot. Use snapshot.selector=latest for the newest real snapshot or selector=id for a specific real snapshot. The run result is only a bounded summary: when the user requests the full research report, call us_artifact_read with the returned artifact_id and section=report, and never present the run summary as the full report.',
     parameters: {
         workflow: {
             type: 'string',
@@ -747,18 +747,17 @@ const researchTool = defineTool({
                     type: 'string',
                     required: true,
                     enum: [
-                        'demo',
                         'latest',
                         'id'
                     ],
-                    description: 'Offline snapshot selector.'
+                    description: 'Real snapshot selector. Use latest for the newest normalized snapshot or id for a specific normalized snapshot. Demo fixtures are intentionally unavailable to model-facing research.'
                 },
                 snapshot_id: {
                     type: 'string',
-                    description: 'Canonical snapshot ID; required only when selector=id.'
+                    description: 'Canonical real snapshot ID; required only when selector=id.'
                 }
             },
-            description: 'Versioned offline snapshot source.'
+            description: 'Normalized real-data snapshot source. Use latest for routine current research and id for reproducible research against a known snapshot.'
         },
         subject: {
             type: 'string',
@@ -793,7 +792,7 @@ const researchTool = defineTool({
 });
 const artifactTool = defineTool({
     name: 'us_artifact_read',
-    description: 'Read a bounded canonical US research artifact section by opaque artifact ID.',
+    description: 'Read a bounded canonical US research artifact section by opaque artifact ID. When the user asks for a full or complete research report, section=report is required; summary is only a bounded preview and must never be presented as the full report.',
     parameters: {
         artifact_id: {
             type: 'string',
@@ -808,7 +807,7 @@ const artifactTool = defineTool({
                 'manifest',
                 'packet'
             ],
-            description: 'Predefined artifact section to read.'
+            description: 'Predefined artifact section to read. Use report for the full Markdown research report; summary is only a compact machine-readable preview.'
         },
         max_chars: {
             type: 'integer',

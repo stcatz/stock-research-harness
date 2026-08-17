@@ -655,7 +655,7 @@ export async function readArtifact(args: unknown, options: CliBridgeOptions = {}
 function registerResearchTool(ctx: Context) {
   return ctx.tools.register(defineTool({
     name: 'cn_research_run',
-    description: 'Run the canonical CN A-share research CLI with a versioned JSON request.',
+    description: 'Run a real CN A-share research workflow from a normalized snapshot. Use snapshot.selector=latest for the newest real snapshot or selector=id for a specific real snapshot. The run result is only a bounded summary: when the user requests the full research report, call cn_artifact_read with the returned artifact_id and section=report, and never present the run summary as the full report.',
     parameters: {
       workflow: {
         type: 'string',
@@ -676,15 +676,15 @@ function registerResearchTool(ctx: Context) {
           selector: {
             type: 'string',
             required: true,
-            enum: ['demo', 'latest', 'id'],
-            description: 'Snapshot selector.',
+            enum: ['latest', 'id'],
+            description: 'Real snapshot selector. Use latest for the newest normalized snapshot or id for a specific normalized snapshot. Demo fixtures are intentionally unavailable to model-facing research.',
           },
           id: {
             type: 'string',
-            description: 'Snapshot id when selector=id.',
+            description: 'Canonical real snapshot id; required only when selector=id.',
           },
         },
-        description: 'Snapshot source selector.',
+        description: 'Normalized real-data snapshot source. Use latest for routine current research and id for reproducible research against a known snapshot.',
       },
       subject: {
         type: 'string',
@@ -715,7 +715,7 @@ function registerResearchTool(ctx: Context) {
 function registerArtifactTool(ctx: Context) {
   return ctx.tools.register(defineTool({
     name: 'cn_artifact_read',
-    description: 'Read a canonical CN research artifact section by artifact_id.',
+    description: 'Read a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required; summary is only a bounded preview and must never be presented as the full report.',
     parameters: {
       artifact_id: {
         type: 'string',
@@ -725,7 +725,7 @@ function registerArtifactTool(ctx: Context) {
       section: {
         type: 'string',
         enum: ['summary', 'report', 'manifest', 'packet'],
-        description: 'Artifact section to read.',
+        description: 'Artifact section to read. Use report for the full Markdown research report; summary is only a compact machine-readable preview.',
       },
       max_chars: {
         type: 'integer',

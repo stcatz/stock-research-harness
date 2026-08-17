@@ -144,6 +144,28 @@ test('apply registers both official tool names', () => {
   )
 })
 
+test('model-facing tools expose only real snapshots and require report reads for full reports', () => {
+  const registered = []
+  apply({ tools: { register(tool) { registered.push(tool) } } })
+
+  const research = registered.find((tool) => tool.name === 'cn_research_run')
+  const artifact = registered.find((tool) => tool.name === 'cn_artifact_read')
+  assert.ok(research)
+  assert.ok(artifact)
+
+  const selector = research.parameters.properties.snapshot.properties.selector
+  assert.deepEqual(selector.enum, ['latest', 'id'])
+  assert.equal(selector.enum.includes('demo'), false)
+  assert.match(research.description, /bounded summary/i)
+  assert.match(research.description, /cn_artifact_read/i)
+  assert.match(research.description, /section=report/i)
+  assert.match(research.description, /never present.*summary.*full report/i)
+  assert.match(selector.description, /Demo fixtures are intentionally unavailable/i)
+  assert.match(artifact.description, /section=report is required/i)
+  assert.match(artifact.description, /summary.*must never be presented as the full report/i)
+  assert.match(artifact.parameters.properties.section.description, /Use report for the full Markdown research report/i)
+})
+
 test('callResearchCli sends canonical argv and JSON stdin', async () => {
   const { workspace, projectRoot } = await makeTempProject()
   await writeFakePython(projectRoot)
@@ -253,7 +275,7 @@ test('runResearchWorkflow rejects fields the canonical CLI contract does not all
       {
         workflow: 'daily_report',
         decision_at: '2026-08-16T08:30:00+08:00',
-        snapshot: { selector: 'demo' },
+        snapshot: { selector: 'latest' },
         subject: 'not allowed',
       },
       { projectRoot },
@@ -368,7 +390,7 @@ test('registered tool execute forwards exec.signal to the CLI', async () => {
       {
         workflow: 'daily_report',
         decision_at: '2026-08-16T08:30:00+08:00',
-        snapshot: { selector: 'demo' },
+        snapshot: { selector: 'latest' },
       },
       { signal: controller.signal },
     )

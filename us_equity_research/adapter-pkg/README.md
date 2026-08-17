@@ -20,14 +20,14 @@ The bundle is permanently bound to `market=US` and `schema_version=0.1`. It neve
 
 - `workflow`: `daily_report | theme_research | stock_research`
 - `decision_at`: timezone-aware ISO-8601 timestamp
-- `snapshot`: `{ selector: demo | latest | id, snapshot_id?: string }`
+- Model-facing `snapshot`: `{ selector: latest | id, snapshot_id?: string }`. Real research uses `latest` or `id`; `demo` remains available only through the direct bridge for installation tests and is not exposed to the model.
 - `subject`: required only for `theme_research`
 - `symbol`: required only for `stock_research`; uppercase `[A-Z][A-Z0-9.-]{0,14}`
 - `top_n`: optional integer from 1 through 20
 
 The snapshot field is named `snapshot_id`; the legacy `id` alias is intentionally rejected.
 
-`us_artifact_read` accepts an `artifact_id`, an optional `summary | report | manifest | packet` section, and an optional `max_chars` from 500 through 20,000.
+`us_artifact_read` accepts an `artifact_id`, an optional `summary | report | manifest | packet` section, and an optional `max_chars` from 500 through 20,000. When a user requests the full report, read `section=report`; `summary` is only a compact preview and must not be presented as the full report.
 
 The adapter keeps domain outcomes such as `partial`, `UNKNOWN`, and explicit data gaps as successful results. Contract and not-found errors remain structured. Process failures, timeouts, integrity failures, invalid handshakes, or non-canonical output are infrastructure errors.
 

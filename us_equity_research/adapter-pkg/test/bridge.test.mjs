@@ -212,6 +212,28 @@ test('apply registers exactly the two US tool names', () => {
   ])
 })
 
+test('model-facing tools expose only real snapshots and require report reads for full reports', () => {
+  const registered = []
+  apply({ tools: { register(tool) { registered.push(tool) } } })
+
+  const research = registered.find((tool) => tool.name === 'us_research_run')
+  const artifact = registered.find((tool) => tool.name === 'us_artifact_read')
+  assert.ok(research)
+  assert.ok(artifact)
+
+  const selector = research.parameters.properties.snapshot.properties.selector
+  assert.deepEqual(selector.enum, ['latest', 'id'])
+  assert.equal(selector.enum.includes('demo'), false)
+  assert.match(research.description, /bounded summary/i)
+  assert.match(research.description, /us_artifact_read/i)
+  assert.match(research.description, /section=report/i)
+  assert.match(research.description, /never present.*summary.*full report/i)
+  assert.match(selector.description, /Demo fixtures are intentionally unavailable/i)
+  assert.match(artifact.description, /section=report is required/i)
+  assert.match(artifact.description, /summary.*must never be presented as the full report/i)
+  assert.match(artifact.parameters.properties.section.description, /Use report for the full Markdown research report/i)
+})
+
 test('callResearchCli uses explicit argv, one JSON stdin object, and a secret-free env', async () => {
   const { workspace, projectRoot } = await makeTempProject()
   await writeFakePython(projectRoot)
@@ -450,7 +472,7 @@ test('registered tool forwards exec.signal and cancellation leaves no grandchild
   try {
     const pending = tool.execute({
       workflow: 'daily_report', decision_at: '2026-08-16T08:30:00-04:00',
-      snapshot: { selector: 'demo' },
+      snapshot: { selector: 'latest' },
     }, { signal: controller.signal })
     await waitFor(async () => {
       try {
