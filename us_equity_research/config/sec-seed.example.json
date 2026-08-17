@@ -1,7 +1,8 @@
 {
   "schema_version": "0.1",
   "market": "US",
-  "as_of": "2026-08-17T20:00:00+00:00",
+  "example_notice": "EXAMPLE_ONLY: copy this file, update as_of and research narratives, then remove example_notice before collection.",
+  "as_of": "2026-08-16T20:00:00+00:00",
   "themes": [
     {
       "theme_id": "theme-cloud-capex",
@@ -27,7 +28,7 @@
         },
         "timeliness": {
           "assessment": "unknown",
-          "reason": "SEC acceptance timestamps receive a conservative availability buffer and do not prove market timing."
+          "reason": "SEC acceptance timestamps receive an estimated availability offset and do not prove market timing."
         }
       },
       "transmission_chain": [

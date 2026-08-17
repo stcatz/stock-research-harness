@@ -23,6 +23,106 @@ def _demoa_candidate(snapshot: dict[str, object]) -> dict[str, object]:
 
 
 class CalculationTests(unittest.TestCase):
+    def test_fy_only_metrics_use_fy_formulas_without_mixing_ttm_facts(self) -> None:
+        raw = copy.deepcopy(_load_demo_snapshot())
+        candidate = _demoa_candidate(raw)
+        replacements = {
+            "FACT-DEMOA-REV-TTM": ("FACT-DEMOA-REV-FY", "revenue_fy", "2025-12-31"),
+            "FACT-DEMOA-REV-TTM-PRIOR": (
+                "FACT-DEMOA-REV-FY-PRIOR",
+                "revenue_fy",
+                "2024-12-31",
+            ),
+            "FACT-DEMOA-OPINC-TTM": (
+                "FACT-DEMOA-OPINC-FY",
+                "operating_income_fy",
+                "2025-12-31",
+            ),
+            "FACT-DEMOA-FCF-TTM": (
+                "FACT-DEMOA-FCF-FY",
+                "free_cash_flow_fy",
+                "2025-12-31",
+            ),
+        }
+        for fact in raw["financial_facts"]:  # type: ignore[index]
+            replacement = replacements.get(fact["fact_id"])
+            if replacement is None:
+                continue
+            old_id = fact["fact_id"]
+            fact["fact_id"], fact["metric"], fact["period_end"] = replacement
+            candidate["financial_fact_refs"][  # type: ignore[index]
+                candidate["financial_fact_refs"].index(old_id)  # type: ignore[union-attr]
+            ] = fact["fact_id"]
+        raw["financial_facts"].append(  # type: ignore[index]
+            {
+                "fact_id": "FACT-DEMOA-FCF-TTM-UNUSED",
+                "security_id": "US.DEMOA",
+                "metric": "free_cash_flow_ttm",
+                "value": 999999999.0,
+                "unit": "USD",
+                "period_end": "2025-12-31",
+                "available_at": "2026-02-10T08:00:00-05:00",
+                "evidence_ref": "EV-SEC-001",
+            }
+        )
+        candidate["financial_fact_refs"].append("FACT-DEMOA-FCF-TTM-UNUSED")  # type: ignore[union-attr]
+
+        snapshot = validate_snapshot(raw)
+        calculations = {
+            item["metric"]: item
+            for item in build_calculation_bundle(
+                snapshot, _demoa_candidate(snapshot.data), DECISION_AT
+            )["calculations"]
+        }
+
+        expected = {
+            "revenue_growth": (
+                "(revenue_fy_current - revenue_fy_prior) / revenue_fy_prior",
+                ["FACT-DEMOA-REV-FY", "FACT-DEMOA-REV-FY-PRIOR"],
+            ),
+            "operating_margin": (
+                "operating_income_fy / revenue_fy",
+                ["FACT-DEMOA-OPINC-FY", "FACT-DEMOA-REV-FY"],
+            ),
+            "free_cash_flow_margin": (
+                "free_cash_flow_fy / revenue_fy",
+                ["FACT-DEMOA-FCF-FY", "FACT-DEMOA-REV-FY"],
+            ),
+        }
+        for metric, (formula, input_fact_ids) in expected.items():
+            with self.subTest(metric=metric):
+                self.assertEqual(calculations[metric]["status"], "OK")
+                self.assertEqual(calculations[metric]["formula"], formula)
+                self.assertEqual(calculations[metric]["input_fact_ids"], input_fact_ids)
+                self.assertTrue(all("TTM" not in fact_id for fact_id in input_fact_ids))
+
+    def test_mixed_accounting_periods_fail_closed(self) -> None:
+        raw = copy.deepcopy(_load_demo_snapshot())
+        facts = {fact["fact_id"]: fact for fact in raw["financial_facts"]}  # type: ignore[index]
+        facts["FACT-DEMOA-OPINC-TTM"]["period_end"] = "2026-03-31"
+        facts["FACT-DEMOA-FCF-TTM"]["period_end"] = "2026-03-31"
+        facts["FACT-DEMOA-DEBT"]["period_end"] = "2026-03-31"
+
+        snapshot = validate_snapshot(raw)
+        calculations = {
+            item["metric"]: item
+            for item in build_calculation_bundle(
+                snapshot, _demoa_candidate(snapshot.data), DECISION_AT
+            )["calculations"]
+        }
+
+        for metric in (
+            "operating_margin",
+            "free_cash_flow_margin",
+            "net_cash",
+            "enterprise_value",
+            "ev_to_revenue",
+            "free_cash_flow_yield",
+        ):
+            with self.subTest(metric=metric):
+                self.assertEqual(calculations[metric]["status"], "UNKNOWN")
+                self.assertIsNone(calculations[metric]["value"])
+
     def test_demoa_calculations_are_deterministic_and_traceable(self) -> None:
         snapshot = validate_snapshot(_load_demo_snapshot())
         bundle = build_calculation_bundle(snapshot, _demoa_candidate(snapshot.data), DECISION_AT)

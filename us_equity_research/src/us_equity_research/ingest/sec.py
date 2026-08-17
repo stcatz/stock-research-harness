@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import os
 import stat
 import time
@@ -42,10 +43,15 @@ MAX_SEED_THEMES = 20
 MAX_SEED_CANDIDATES = 50
 MIN_REQUEST_INTERVAL_SECONDS = 0.11
 SEC_AVAILABILITY_BUFFER = timedelta(minutes=3)
-SUPPORTED_FORMS = frozenset({"10-K", "10-Q", "8-K", "20-F", "6-K", "40-F"})
-ANNUAL_FORMS = frozenset({"10-K", "20-F", "40-F"})
-INTERIM_FORMS = frozenset({"10-Q", "6-K"})
+BASE_SUPPORTED_FORMS = frozenset({"10-K", "10-Q", "8-K", "20-F", "6-K", "40-F"})
+SUPPORTED_FORMS = frozenset(
+    {*BASE_SUPPORTED_FORMS, *(f"{form}/A" for form in BASE_SUPPORTED_FORMS)}
+)
+ANNUAL_BASE_FORMS = frozenset({"10-K", "20-F", "40-F"})
+INTERIM_BASE_FORMS = frozenset({"10-Q", "6-K"})
 LICENSE_ATTESTATION = "authorized_for_local_research_snapshot"
+
+Clock = Callable[[], datetime]
 
 
 @dataclass(frozen=True)
@@ -139,30 +145,39 @@ def collect_sec_snapshot(
     workspace: Path,
     seed_path: Path,
     snapshot_id: str,
-    retrieved_at: str | None = None,
     market_path: Path | None = None,
     client: SecClient | None = None,
+    clock: Clock | None = None,
 ) -> dict[str, Any]:
     """Collect SEC metadata/companyfacts and atomically publish one normalized snapshot."""
 
     normalized_snapshot_id = validate_identifier(snapshot_id, "snapshot_id")
-    retrieved = (
-        parse_datetime(retrieved_at, "retrieved_at")
-        if retrieved_at is not None
-        else datetime.now(UTC)
-    )
-    retrieved_iso = _isoformat(retrieved)
     seed = _read_json_file(seed_path, "seed JSON")
+    if "example_notice" in seed:
+        raise ContractError(
+            "refusing to collect an example seed; copy it, remove example_notice, and provide reviewed inputs"
+        )
     market = _read_json_file(market_path, "market JSON") if market_path else None
+    if clock is not None and client is None:
+        raise ContractError("an injected collection clock requires an injected SEC client")
     sec_client = client or SecClient(user_agent=os.environ.get("SEC_USER_AGENT", ""))
+    collection_clock = clock or _system_utc_now
+    retrieval_started = _read_clock(collection_clock)
 
     snapshot = _build_snapshot(
         seed=seed,
         snapshot_id=normalized_snapshot_id,
-        retrieved=retrieved,
+        retrieved=retrieval_started,
         client=sec_client,
         market=market,
     )
+    retrieval_completed = _read_clock(collection_clock)
+    if retrieval_completed < retrieval_started:
+        raise ContractError("collection clock moved backwards")
+    snapshot["retrieved_at"] = _isoformat(retrieval_completed)
+    for evidence in snapshot["evidence"]:
+        if evidence["source_level"] == "official" and evidence["category"] == "sec_filing":
+            evidence["retrieved_at"] = _isoformat(retrieval_completed)
     validated = validate_snapshot(snapshot)
     relative_path = Path("data") / "normalized" / "us" / normalized_snapshot_id / "snapshot.json"
     _publish_snapshot(workspace, normalized_snapshot_id, snapshot)
@@ -174,7 +189,7 @@ def collect_sec_snapshot(
         "snapshot_id": normalized_snapshot_id,
         "relative_path": relative_path.as_posix(),
         "snapshot_hash": validated.snapshot_hash,
-        "retrieved_at": retrieved_iso,
+        "retrieved_at": _isoformat(retrieval_completed),
         "pit_quality": validated.pit_quality,
         "evidence_count": len(snapshot["evidence"]),
         "financial_fact_count": len(snapshot["financial_facts"]),
@@ -192,6 +207,7 @@ def _build_snapshot(
     market: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     _validate_seed_root(seed, retrieved)
+    snapshot_as_of = parse_datetime(seed["as_of"], "seed.as_of")
     evidence_by_id: dict[str, dict[str, Any]] = {}
     facts_by_id: dict[str, dict[str, Any]] = {}
     themes: list[dict[str, Any]] = []
@@ -208,6 +224,7 @@ def _build_snapshot(
             candidate, candidate_evidence, candidate_facts = _collect_candidate(
                 candidate_seed,
                 retrieved=retrieved,
+                snapshot_as_of=snapshot_as_of,
                 client=client,
             )
             for item in candidate_evidence:
@@ -221,7 +238,9 @@ def _build_snapshot(
             dimension: {
                 "assessment": theme_seed["dimensions"][dimension]["assessment"],
                 "reason": theme_seed["dimensions"][dimension]["reason"],
-                "evidence_refs": theme_refs,
+                # The collector does not parse filing prose. Researcher-authored
+                # dimension claims therefore remain explicitly unsupported.
+                "evidence_refs": [],
             }
             for dimension in DIMENSIONS
         }
@@ -238,7 +257,7 @@ def _build_snapshot(
                 "data_gaps": _unique_strings(
                     [
                         *theme_seed.get("data_gaps", []),
-                        "SEC acceptanceDateTime is buffered by three minutes; near-filing strict PIT replay remains UNKNOWN.",
+                        "SEC filing availability uses a three-minute estimate; actual public availability can be later, so near-filing strict PIT replay remains UNKNOWN.",
                     ]
                 ),
                 "candidates": candidates,
@@ -250,6 +269,7 @@ def _build_snapshot(
         market_evidence, market_facts, market_context = _validate_market_payload(
             market,
             retrieved=retrieved,
+            snapshot_as_of=snapshot_as_of,
             security_ids={
                 candidate["security_id"] for theme in themes for candidate in theme["candidates"]
             },
@@ -282,7 +302,6 @@ def _build_snapshot(
                     }
                 ]
 
-    snapshot_as_of = parse_datetime(seed["as_of"], "seed.as_of")
     return {
         "schema_version": SCHEMA_VERSION,
         "market": MARKET,
@@ -302,6 +321,7 @@ def _collect_candidate(
     seed: Mapping[str, Any],
     *,
     retrieved: datetime,
+    snapshot_as_of: datetime,
     client: SecClient,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     _validate_candidate_seed(seed)
@@ -310,7 +330,14 @@ def _collect_candidate(
     companyfacts = client.get_companyfacts(cik)
     _require_matching_sec_cik(submissions.get("cik"), cik, "SEC submissions")
     _require_matching_sec_cik(companyfacts.get("cik"), cik, "SEC companyfacts")
-    filings = _parse_filings(submissions, cik=cik, retrieved=retrieved)
+    _require_symbol_ownership(seed, submissions)
+    issuer_name = require_string(submissions.get("name"), "SEC submissions.name")
+    filings = _parse_filings(
+        submissions,
+        cik=cik,
+        retrieved=retrieved,
+        snapshot_as_of=snapshot_as_of,
+    )
     facts, fact_accessions, annual_period_end = _extract_financial_facts(
         companyfacts,
         filings=filings,
@@ -325,7 +352,7 @@ def _collect_candidate(
         _filing_evidence(
             filing,
             cik=cik,
-            issuer_name=str(submissions.get("name") or seed["name"]),
+            issuer_name=issuer_name,
             retrieved=retrieved,
             metrics=[fact["metric"] for fact in facts if fact["_accn"] == filing["accn"]],
         )
@@ -348,30 +375,44 @@ def _collect_candidate(
     data_gaps.extend(
         [
             "Researcher-authored narrative has not been machine-verified against filing text.",
-            "SEC acceptanceDateTime is not exact public availability; a three-minute conservative buffer is used.",
+            "SEC acceptanceDateTime is not exact public availability; a three-minute estimate is used and actual availability can be later.",
         ]
     )
     if not evidence:
         data_gaps.append("No supported SEC filing was accepted by retrieved_at.")
     if not finalized_facts:
         data_gaps.append("No deterministic annual or instant SEC companyfacts were extractable.")
+    if sum(fact["metric"] == "revenue_fy" for fact in finalized_facts) < 2:
+        data_gaps.append(
+            "A second distinct fiscal-year revenue fact is unavailable; annual revenue growth is UNKNOWN."
+        )
     if _has_newer_interim(filings, annual_period_end):
         data_gaps.append(
             "A newer interim filing exists; FY + current YTD - prior YTD TTM roll-forward is not implemented, so annual-period metrics are stale."
         )
+    if any(filing["form"].endswith("/A") for filing in filings.values()):
+        data_gaps.append(
+            "An SEC amendment exists; the latest accepted accession supersedes older facts for the same form and report period."
+        )
     data_gaps.append("No licensed structured market snapshot was supplied.")
+    data_gaps.append(
+        "Instant period-end shares outstanding are not extracted; FY weighted-average diluted shares are not valid for current market-cap calculations."
+    )
+    data_gaps.append(
+        "Total debt is not extracted because common SEC long-term-debt tags may omit short-term borrowings and commercial paper."
+    )
 
     financial_refs = sorted(fact["fact_id"] for fact in finalized_facts)
     return (
         {
             "security_id": seed["security_id"],
             "symbol": seed["symbol"],
-            "name": seed["name"],
+            "name": issuer_name,
             "role": seed["role"],
             "thesis": seed["thesis"],
-            "bull_case": {"text": seed["bull_case"], "evidence_refs": official_refs},
-            "bear_case": {"text": seed["bear_case"], "evidence_refs": official_refs},
-            "risk_verdict": {"text": seed["risk_verdict"], "evidence_refs": official_refs},
+            "bull_case": {"text": seed["bull_case"], "evidence_refs": []},
+            "bear_case": {"text": seed["bear_case"], "evidence_refs": []},
+            "risk_verdict": {"text": seed["risk_verdict"], "evidence_refs": []},
             "evidence_refs": official_refs,
             "market_evidence_refs": [],
             "financial_fact_refs": financial_refs,
@@ -397,6 +438,7 @@ def _parse_filings(
     *,
     cik: str,
     retrieved: datetime,
+    snapshot_as_of: datetime,
 ) -> dict[str, dict[str, Any]]:
     try:
         recent = require_mapping(
@@ -435,8 +477,8 @@ def _parse_filings(
             columns["acceptanceDateTime"][index],
             f"filings.recent.acceptanceDateTime[{index}]",
         )
-        conservative_available = acceptance + SEC_AVAILABILITY_BUFFER
-        if conservative_available > retrieved:
+        estimated_available = acceptance + SEC_AVAILABILITY_BUFFER
+        if estimated_available > retrieved:
             continue
         primary_document = require_string(
             columns["primaryDocument"][index],
@@ -452,10 +494,12 @@ def _parse_filings(
             # Some event filings have an empty reportDate. Filing date is a
             # conservative metadata fallback, not a claim about event timing.
             report_date = filing_date
+        if report_date > snapshot_as_of.date():
+            continue
         filings[accession] = {
             "accn": accession,
             "acceptance": acceptance,
-            "available": conservative_available,
+            "available": estimated_available,
             "filing_date": filing_date,
             "report_date": report_date,
             "form": form,
@@ -475,7 +519,7 @@ def _extract_financial_facts(
     metrics: list[dict[str, Any]] = []
     annual_period_end: date | None = None
 
-    revenue = _select_annual_entry(
+    revenues = _select_annual_entries(
         companyfacts,
         (
             "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -485,7 +529,9 @@ def _extract_financial_facts(
         ),
         "USD",
         filings,
+        limit=2,
     )
+    revenue = revenues[0] if revenues else None
     operating = _select_annual_entry(
         companyfacts,
         ("OperatingIncomeLoss", "ProfitLossFromOperatingActivities"),
@@ -510,32 +556,25 @@ def _extract_financial_facts(
         "USD",
         filings,
     )
-    diluted = _select_annual_entry(
-        companyfacts,
-        ("WeightedAverageNumberOfDilutedSharesOutstanding", "WeightedAverageSharesDiluted"),
-        "shares",
-        filings,
-    )
+    for revenue_entry in revenues:
+        metrics.append(_financial_fact("revenue_fy", revenue_entry, security_id, symbol, "USD"))
 
     for metric, entry, unit in (
-        ("revenue_ttm", revenue, "USD"),
-        ("operating_income_ttm", operating, "USD"),
+        ("operating_income_fy", operating, "USD"),
         ("cash_and_equivalents", cash, "USD"),
-        ("diluted_shares", diluted, "shares"),
     ):
         if entry is not None:
             metrics.append(_financial_fact(metric, entry, security_id, symbol, unit))
-            if metric in {"revenue_ttm", "operating_income_ttm"}:
-                annual_period_end = max(annual_period_end or entry["end"], entry["end"])
+    annual_duration_entries = [
+        entry for entry in (revenue, operating, operating_cash, capex) if entry is not None
+    ]
+    if annual_duration_entries:
+        annual_period_end = max(entry["end"] for entry in annual_duration_entries)
 
     if operating_cash and capex and _same_period_and_accession(operating_cash, capex):
         fcf_entry = dict(operating_cash)
         fcf_entry["val"] = operating_cash["val"] - capex["val"]
-        metrics.append(_financial_fact("free_cash_flow_ttm", fcf_entry, security_id, symbol, "USD"))
-
-    debt = _extract_debt(companyfacts, filings)
-    if debt is not None:
-        metrics.append(_financial_fact("total_debt", debt, security_id, symbol, "USD"))
+        metrics.append(_financial_fact("free_cash_flow_fy", fcf_entry, security_id, symbol, "USD"))
 
     accessions = {fact["_accn"] for fact in metrics}
     return metrics, accessions, annual_period_end
@@ -547,14 +586,33 @@ def _select_annual_entry(
     unit: str,
     filings: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any] | None:
+    entries = _select_annual_entries(companyfacts, concepts, unit, filings, limit=1)
+    return entries[0] if entries else None
+
+
+def _select_annual_entries(
+    companyfacts: Mapping[str, Any],
+    concepts: tuple[str, ...],
+    unit: str,
+    filings: Mapping[str, Mapping[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
     candidates: list[tuple[date, datetime, int, dict[str, Any]]] = []
     for priority, concept in enumerate(concepts):
         for entry in _concept_entries(companyfacts, concept, unit):
             accession = entry.get("accn")
             filing = filings.get(accession) if isinstance(accession, str) else None
-            if filing is None or filing["form"] not in ANNUAL_FORMS:
+            if (
+                filing is None
+                or _base_form(filing["form"]) not in ANNUAL_BASE_FORMS
+                or _filing_is_superseded(filing, filings)
+            ):
                 continue
-            if entry.get("fp") != "FY" or entry.get("form") not in ANNUAL_FORMS:
+            if (
+                entry.get("fp") != "FY"
+                or _base_form(str(entry.get("form"))) not in ANNUAL_BASE_FORMS
+            ):
                 continue
             start = _optional_date(entry.get("start"))
             end = _optional_date(entry.get("end"))
@@ -565,7 +623,14 @@ def _select_annual_entry(
                 continue
             normalized = {**entry, "start": start, "end": end, "val": float(value)}
             candidates.append((end, filing["acceptance"], -priority, normalized))
-    return max(candidates, default=None, key=lambda item: item[:3])[3] if candidates else None
+    by_period: dict[date, tuple[date, datetime, int, dict[str, Any]]] = {}
+    for candidate in candidates:
+        period = candidate[0]
+        current = by_period.get(period)
+        if current is None or candidate[:3] > current[:3]:
+            by_period[period] = candidate
+    ordered = sorted(by_period.values(), key=lambda item: item[:3], reverse=True)
+    return [item[3] for item in ordered[:limit]]
 
 
 def _select_instant_entry(
@@ -579,7 +644,7 @@ def _select_instant_entry(
         for entry in _concept_entries(companyfacts, concept, unit):
             accession = entry.get("accn")
             filing = filings.get(accession) if isinstance(accession, str) else None
-            if filing is None:
+            if filing is None or _filing_is_superseded(filing, filings):
                 continue
             end = _optional_date(entry.get("end"))
             value = entry.get("val")
@@ -804,6 +869,7 @@ def _validate_market_payload(
     market: Mapping[str, Any],
     *,
     retrieved: datetime,
+    snapshot_as_of: datetime,
     security_ids: set[str],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     reject_unknown_fields(
@@ -847,6 +913,8 @@ def _validate_market_payload(
             raise ContractError(
                 "market evidence retrieved_at must not exceed snapshot retrieved_at"
             )
+        if parse_datetime(item.get("as_of"), "market evidence as_of") > snapshot_as_of:
+            raise ContractError("market evidence as_of must not exceed seed.as_of")
     close_by_security: dict[str, dict[str, Any]] = {}
     for fact in facts:
         if fact.get("metric") != "close_price":
@@ -862,6 +930,30 @@ def _validate_market_payload(
         )
         if evidence_item is None or evidence_item.get("category") != "market_price":
             raise ContractError("close_price must reference structured market_price evidence")
+        value = fact.get("value")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ContractError("close_price value must be a finite positive number")
+        if fact.get("unit") != "USD/share":
+            raise ContractError("close_price unit must be USD/share")
+        fact_available = parse_datetime(fact.get("available_at"), "close_price.available_at")
+        if fact_available > retrieved:
+            raise ContractError("close_price.available_at must not exceed collection start")
+        evidence_available = parse_datetime(
+            evidence_item.get("available_at"), "market evidence available_at"
+        )
+        if fact_available < evidence_available:
+            raise ContractError(
+                "close_price.available_at must not precede cited evidence.available_at"
+            )
+        period_end = _parse_date(fact.get("period_end"), "close_price.period_end")
+        evidence_as_of = parse_datetime(evidence_item.get("as_of"), "market evidence as_of")
+        if period_end != evidence_as_of.date():
+            raise ContractError("close_price.period_end must match cited evidence.as_of date")
         close_by_security[security_id] = fact
     missing = sorted(security_ids - set(close_by_security))
     if missing:
@@ -876,7 +968,7 @@ def _unknown_market_context() -> dict[str, Any]:
         "rates": "UNKNOWN",
         "liquidity": "UNKNOWN",
         "calculation_note": (
-            "No licensed structured market JSON supplied. SEC acceptanceDateTime is buffered by three minutes; near-filing strict PIT use remains UNKNOWN."
+            "No licensed structured market JSON supplied. SEC filing availability uses a three-minute estimate; actual public availability can be later, so near-filing strict PIT use remains UNKNOWN."
         ),
         "evidence_refs": [],
     }
@@ -886,8 +978,25 @@ def _has_newer_interim(
     filings: Mapping[str, Mapping[str, Any]], annual_period_end: date | None
 ) -> bool:
     return annual_period_end is not None and any(
-        filing["form"] in INTERIM_FORMS and filing["report_date"] > annual_period_end
+        _base_form(filing["form"]) in INTERIM_BASE_FORMS
+        and filing["report_date"] > annual_period_end
         for filing in filings.values()
+    )
+
+
+def _base_form(form: str) -> str:
+    return form.removesuffix("/A")
+
+
+def _filing_is_superseded(
+    filing: Mapping[str, Any], filings: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    return any(
+        other["accn"] != filing["accn"]
+        and _base_form(other["form"]) == _base_form(filing["form"])
+        and other["report_date"] == filing["report_date"]
+        and other["acceptance"] > filing["acceptance"]
+        for other in filings.values()
     )
 
 
@@ -1016,12 +1125,42 @@ def _normalize_cik(value: Any) -> str:
     return raw.zfill(10)
 
 
+def _require_symbol_ownership(seed: Mapping[str, Any], submissions: Mapping[str, Any]) -> None:
+    symbol = validate_symbol(seed.get("symbol"), "candidate.symbol")
+    expected_security_id = f"US.{symbol}"
+    if seed.get("security_id") != expected_security_id:
+        raise ContractError(
+            f"candidate.security_id must equal {expected_security_id} for symbol {symbol}"
+        )
+    tickers = require_list(submissions.get("tickers"), "SEC submissions.tickers")
+    normalized_tickers = {
+        _normalize_ticker(item) for item in tickers if isinstance(item, str) and item.strip()
+    }
+    if _normalize_ticker(symbol) not in normalized_tickers:
+        raise ContractError("candidate.symbol does not belong to the supplied SEC CIK")
+
+
+def _normalize_ticker(value: str) -> str:
+    return value.strip().upper().replace(".", "-")
+
+
 def _require_matching_sec_cik(value: Any, expected: str, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ContractError(f"{field} is missing a valid CIK")
     actual = _normalize_cik(str(value))
     if actual != expected:
         raise ContractError(f"{field} CIK does not match the research seed")
+
+
+def _system_utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _read_clock(clock: Clock) -> datetime:
+    value = clock()
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ContractError("collection clock must return a timezone-aware datetime")
+    return value.astimezone(UTC)
 
 
 def _valid_accession(value: str) -> bool:

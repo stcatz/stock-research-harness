@@ -52,29 +52,41 @@ def build_calculation_bundle(
     eligible_fact_records.sort(key=_fact_order_key, reverse=True)
     eligible_fact_records.sort(key=_fact_metric_order_key)
 
+    periodic_basis = "ttm" if facts_by_metric.get("revenue_ttm") else "fy"
+    revenue_metric = f"revenue_{periodic_basis}"
+    operating_income_metric = f"operating_income_{periodic_basis}"
+    free_cash_flow_metric = f"free_cash_flow_{periodic_basis}"
+
     calculations = [
-        _revenue_growth(facts_by_metric, cutoff_excluded_fact_ids),
+        _revenue_growth(
+            facts_by_metric,
+            cutoff_excluded_fact_ids,
+            revenue_metric=revenue_metric,
+        ),
         _ratio_metric(
             "operating_margin",
-            "operating_income_ttm / revenue_ttm",
+            f"{operating_income_metric} / {revenue_metric}",
             "ratio",
             facts_by_metric,
-            numerator_metric="operating_income_ttm",
-            denominator_metric="revenue_ttm",
+            numerator_metric=operating_income_metric,
+            denominator_metric=revenue_metric,
         ),
         _ratio_metric(
             "free_cash_flow_margin",
-            "free_cash_flow_ttm / revenue_ttm",
+            f"{free_cash_flow_metric} / {revenue_metric}",
             "ratio",
             facts_by_metric,
-            numerator_metric="free_cash_flow_ttm",
-            denominator_metric="revenue_ttm",
+            numerator_metric=free_cash_flow_metric,
+            denominator_metric=revenue_metric,
         ),
         _market_cap(facts_by_metric),
         _net_cash(facts_by_metric),
         _enterprise_value(facts_by_metric),
-        _ev_to_revenue(facts_by_metric),
-        _free_cash_flow_yield(facts_by_metric),
+        _ev_to_revenue(facts_by_metric, revenue_metric=revenue_metric),
+        _free_cash_flow_yield(
+            facts_by_metric,
+            free_cash_flow_metric=free_cash_flow_metric,
+        ),
     ]
 
     return {
@@ -95,10 +107,12 @@ def build_calculations(
 def _revenue_growth(
     facts_by_metric: Mapping[str, list[dict[str, Any]]],
     cutoff_excluded_fact_ids: list[str],
+    *,
+    revenue_metric: str,
 ) -> dict[str, Any]:
     metric = "revenue_growth"
-    formula = "(revenue_ttm_current - revenue_ttm_prior) / revenue_ttm_prior"
-    revenues = _latest_distinct_period_facts(facts_by_metric.get("revenue_ttm", []), limit=2)
+    formula = f"({revenue_metric}_current - {revenue_metric}_prior) / {revenue_metric}_prior"
+    revenues = _latest_distinct_period_facts(facts_by_metric.get(revenue_metric, []), limit=2)
     if len(revenues) < 2:
         input_fact_ids = [fact["fact_id"] for fact in revenues[:1]]
         evidence_refs = _evidence_refs(revenues[:1])
@@ -152,6 +166,15 @@ def _ratio_metric(
             [fact["fact_id"] for fact in present_facts],
             _evidence_refs(present_facts),
             period_end,
+        )
+    if not _same_accounting_period(numerator, denominator):
+        return _unknown(
+            metric,
+            formula,
+            unit,
+            [numerator["fact_id"], denominator["fact_id"]],
+            _evidence_refs([numerator, denominator]),
+            denominator["period_end"],
         )
 
     numerator_value = _decimal_value(numerator)
@@ -261,6 +284,15 @@ def _net_cash(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> dict[str, 
             _evidence_refs(present_facts),
             period_end,
         )
+    if not _same_accounting_period(cash, debt):
+        return _unknown(
+            metric,
+            formula,
+            "USD",
+            [cash["fact_id"], debt["fact_id"]],
+            _evidence_refs([cash, debt]),
+            cash["period_end"],
+        )
 
     cash_value = _decimal_value(cash)
     debt_value = _decimal_value(debt)
@@ -309,6 +341,16 @@ def _enterprise_value(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> di
         )
 
     assert cash is not None and debt is not None and shares is not None and price is not None
+    if not _same_accounting_period(cash, debt, shares):
+        return _unknown(
+            metric,
+            formula,
+            "USD",
+            [fact["fact_id"] for fact in (cash, debt, shares, price)],
+            _evidence_refs([cash, debt, shares, price]),
+            cash["period_end"],
+            price["period_end"],
+        )
     cash_value = _decimal_value(cash)
     debt_value = _decimal_value(debt)
     shares_value = _decimal_value(shares)
@@ -351,10 +393,14 @@ def _enterprise_value(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> di
     )
 
 
-def _ev_to_revenue(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _ev_to_revenue(
+    facts_by_metric: Mapping[str, list[dict[str, Any]]],
+    *,
+    revenue_metric: str,
+) -> dict[str, Any]:
     metric = "ev_to_revenue"
-    formula = "enterprise_value / revenue_ttm"
-    revenue = _latest_fact(facts_by_metric, "revenue_ttm")
+    formula = f"enterprise_value / {revenue_metric}"
+    revenue = _latest_fact(facts_by_metric, revenue_metric)
     cash = _latest_fact(facts_by_metric, "cash_and_equivalents")
     debt = _latest_fact(facts_by_metric, "total_debt")
     shares = _latest_fact(facts_by_metric, "diluted_shares")
@@ -381,6 +427,16 @@ def _ev_to_revenue(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> dict[
         and shares is not None
         and price is not None
     )
+    if not _same_accounting_period(revenue, cash, debt, shares):
+        return _unknown(
+            metric,
+            formula,
+            "x",
+            [fact["fact_id"] for fact in (revenue, cash, debt, shares, price)],
+            _evidence_refs([revenue, cash, debt, shares, price]),
+            revenue["period_end"],
+            price["period_end"],
+        )
     revenue_value = _decimal_value(revenue)
     cash_value = _decimal_value(cash)
     debt_value = _decimal_value(debt)
@@ -425,10 +481,14 @@ def _ev_to_revenue(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> dict[
     )
 
 
-def _free_cash_flow_yield(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _free_cash_flow_yield(
+    facts_by_metric: Mapping[str, list[dict[str, Any]]],
+    *,
+    free_cash_flow_metric: str,
+) -> dict[str, Any]:
     metric = "free_cash_flow_yield"
-    formula = "free_cash_flow_ttm / market_cap"
-    fcf = _latest_fact(facts_by_metric, "free_cash_flow_ttm")
+    formula = f"{free_cash_flow_metric} / market_cap"
+    fcf = _latest_fact(facts_by_metric, free_cash_flow_metric)
     shares = _latest_fact(facts_by_metric, "diluted_shares")
     price = _latest_fact(facts_by_metric, "close_price")
     required = [fcf, shares, price]
@@ -447,6 +507,16 @@ def _free_cash_flow_yield(facts_by_metric: Mapping[str, list[dict[str, Any]]]) -
         )
 
     assert fcf is not None and shares is not None and price is not None
+    if not _same_accounting_period(fcf, shares):
+        return _unknown(
+            metric,
+            formula,
+            "ratio",
+            [fact["fact_id"] for fact in (fcf, shares, price)],
+            _evidence_refs([fcf, shares, price]),
+            fcf["period_end"],
+            price["period_end"],
+        )
     fcf_value = _decimal_value(fcf)
     shares_value = _decimal_value(shares)
     price_value = _decimal_value(price)
@@ -553,6 +623,10 @@ def _latest_fact(
 ) -> dict[str, Any] | None:
     items = facts_by_metric.get(metric, [])
     return items[0] if items else None
+
+
+def _same_accounting_period(*facts: Mapping[str, Any]) -> bool:
+    return len({fact["period_end"] for fact in facts}) == 1
 
 
 def _latest_distinct_period_facts(

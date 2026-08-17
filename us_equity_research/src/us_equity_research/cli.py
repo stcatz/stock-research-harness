@@ -35,10 +35,6 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser.add_argument("--seed-json", required=True, help="Research seed JSON path")
     collect_parser.add_argument("--snapshot-id", required=True, help="Immutable snapshot ID")
     collect_parser.add_argument(
-        "--retrieved-at",
-        help="Timezone-aware retrieval timestamp; defaults to current UTC time",
-    )
-    collect_parser.add_argument(
         "--market-json",
         help="Optional BYOK licensed structured-market JSON path",
     )
@@ -81,7 +77,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace=workspace,
                 seed_path=Path(args.seed_json),
                 snapshot_id=args.snapshot_id,
-                retrieved_at=args.retrieved_at,
                 market_path=Path(args.market_json) if args.market_json else None,
             )
         elif args.command == "run":

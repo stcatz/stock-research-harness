@@ -164,8 +164,6 @@ class CliTests(unittest.TestCase):
                     str(seed_path),
                     "--snapshot-id",
                     "golden-us-1",
-                    "--retrieved-at",
-                    "2026-08-18T12:00:00+00:00",
                     "--market-json",
                     str(market_path),
                 ]
@@ -176,7 +174,6 @@ class CliTests(unittest.TestCase):
             workspace=self.workspace.resolve(),
             seed_path=seed_path,
             snapshot_id="golden-us-1",
-            retrieved_at="2026-08-18T12:00:00+00:00",
             market_path=market_path,
         )
         write_json.assert_called_once_with(expected)
@@ -201,12 +198,24 @@ class CliTests(unittest.TestCase):
                 str(seed_path),
                 "--snapshot-id",
                 "missing-user-agent",
-                "--retrieved-at",
-                "2026-08-18T12:00:00+00:00",
             )
         self.assertEqual(run.returncode, 2)
         error = json.loads(run.stderr)
         self.assertIn("SEC_USER_AGENT", error["message"])
+
+    def test_collect_sec_snapshot_does_not_expose_retrieval_timestamp_override(self) -> None:
+        run = self._run_cli(
+            "collect-sec-snapshot",
+            "--seed-json",
+            str(self.workspace / "seed.json"),
+            "--snapshot-id",
+            "no-clock-override",
+            "--retrieved-at",
+            "2020-01-01T00:00:00+00:00",
+        )
+
+        self.assertEqual(run.returncode, 2)
+        self.assertIn("unrecognized arguments: --retrieved-at", run.stderr)
 
     def _run_cli(
         self, *args: str, input_text: str | None = None
