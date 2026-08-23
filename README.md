@@ -71,7 +71,7 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 - 有大小上限的 artifact 读取接口。
 - A 股和美股各自独立的 DeepSeek Harness 薄插件。
 - 远程 Mac 同步脚本与 SSH 端口转发脚本。
-- A 股“研究 seed + BaoStock 日线”的显式单次快照采集器。
+- A 股“研究 seed + 可选 BaoStock/HiThink provider”的显式单次快照采集器；HiThink 模式包含审计原始响应、全市场宽度、特色池、估值和年度三表。
 - 美股 SEC submissions/companyfacts 的显式单次快照采集器，并可选导入经过许可声明的行情 JSON。
 - 不依赖 DSH 的 CN 日报、US 验证 wrapper，以及 A 股 macOS <code>launchd</code> 示例。
 
@@ -79,7 +79,7 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 
 - 可直接商用的数据供应商账号或 API key。
 - 历史 point-in-time 数据仓库。
-- A 股公告/政策全文自动发现与结构化、全市场行情宽度和严格 PIT 回放。
+- A 股公告/政策全文自动发现与结构化，以及严格 PIT 回放。
 - 美股发行人 IR、官方宏观、transcript 和一致预期采集。
 - 多市场常驻任务服务。当前只提供可审计的单次 wrapper 与 A 股 LaunchAgent 示例。
 - 自动发送邮件、微信、Slack 等发布渠道。
@@ -834,7 +834,7 @@ http://127.0.0.1:3080
 
 ### 6. 真实采集与无 DSH 工作流
 
-A 股的研究 seed 保存已经人工核验的政策、公告、题材和候选；采集器只补 BaoStock 不复权日线及三只宽基指数。先复制示例并替换全部合成内容，示例标记未清理时采集器会在联网前拒绝：
+A 股的研究 seed 保存已经人工核验的政策、公告、题材和候选；采集器可选择 BaoStock 或 HiThink 补充结构化市场数据。先复制示例并替换全部合成内容，示例标记未清理时采集器会在联网前拒绝：
 
 ~~~bash
 cd ~/ai/stock/a_share_research
@@ -845,10 +845,29 @@ cp config/research_seed.example.json ~/ai/stock/data/seeds/cn-research-seed.json
 uv run a-share-research --workspace ~/ai/stock \
   collect-snapshot \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider baostock \
   --snapshot-id cn-20260818-manual-v1
 ~~~
 
 CN 快照固定标记为 <code>RECONSTRUCTED_NON_PIT</code>，不能伪装成严格历史回放。生产 CLI 使用真实系统抓取时间，不允许覆盖 <code>retrieved_at</code>；候选代码和身份也必须一致，例如 <code>600000 ↔ CN.SH.600000</code>。
+
+HiThink 是显式 opt-in，并且 API Key 只从环境变量读取：
+
+~~~bash
+export HITHINK_FINANCE_API_KEY='你的 API Key'
+
+uv run a-share-research provider-probe \
+  --provider hithink \
+  --symbol 600519.SH
+
+uv run a-share-research --workspace ~/ai/stock \
+  collect-snapshot \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
+  --snapshot-id cn-20260818-hithink-v1
+~~~
+
+该模式同时冻结候选/宽基不复权日线、全市场宽度、涨跌停与炸板池、最新估值和最近两个可对齐年度的三表字段。缺值保持 <code>UNKNOWN</code>；供应商题材原因不算官方证据；官方公告门槛仍由 seed 中的一级来源满足。成功响应只保存在仓库外的私有 raw audit store，snapshot 和报告仅保留哈希、request ID 和 opaque artifact ID。
 
 美股采集器从 SEC submissions 与 companyfacts 获取 filing 元数据和可确定性解析的财务事实。它要求 SEC 合规的 <code>SEC_USER_AGENT</code>，不需要 API key；没有经过许可声明的行情 JSON 时，价格、估值和市场门槛保持 <code>UNKNOWN</code>，候选不会被冒充为可观察结论：
 
@@ -870,7 +889,8 @@ uv run us-equity-research --workspace ~/ai/stock \
 ~~~bash
 bash ~/ai/stock/scripts/run_cn_daily.sh \
   --root ~/ai/stock \
-  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink
 
 SEC_USER_AGENT='stock-research-harness your-real-contact@example.com' \
 bash ~/ai/stock/scripts/run_us_validation.sh \
@@ -887,10 +907,11 @@ bash ~/ai/stock/scripts/run_us_validation.sh \
 bash ~/ai/stock/scripts/install_cn_launchd.sh \
   --root /Users/yourname/ai/stock \
   --seed-json /Users/yourname/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
   --load
 ~~~
 
-安装器默认只渲染 plist；只有 <code>--load</code> 才会加载。执行顺序是“采集 → 显式 ID 研究 → canonical artifact → 完整报告”，所以即使 DSH 暂停或升级失败，日报链路也不会停止。美股目前提供单次验证 wrapper，不默认安装定时任务。
+安装器默认只渲染 plist；只有 <code>--load</code> 才会加载。执行顺序是“采集 → 显式 ID 研究 → canonical artifact → 完整报告”，所以即使 DSH 暂停或升级失败，日报链路也不会停止。LaunchAgent 不读取 <code>~/.zshrc</code>，安装器也不会把 HiThink Key 写进 plist；使用 HiThink 调度时，必须另行通过登录会话或 Keychain 秘密注入 <code>HITHINK_FINANCE_API_KEY</code>。缺少 Key 时采集会安全失败。美股目前提供单次验证 wrapper，不默认安装定时任务。
 
 ## 数据源和许可证策略
 
@@ -905,7 +926,7 @@ bash ~/ai/stock/scripts/install_cn_launchd.sh \
 5. 行业资料。
 6. 新闻、论坛和社交媒体只作为线索，不作为最终事实。
 
-个人研究可以用 Tushare、BaoStock 或 AKShare 做内部适配和交叉检查，但代码许可证不等于数据许可证。收费 newsletter、公开数据服务或商业产品必须重新核对数据商和原始网站的抓取、缓存、展示与再分发条款。
+个人研究可以用 HiThink Financial API、Tushare、BaoStock 或 AKShare 做内部适配和交叉检查，但代码许可证不等于数据许可证。[HiThink Financial-API](https://github.com/HiThink-Tech/Financial-API) 的仓库许可证也不等于对上游数据的商业使用或再分发授权。收费 newsletter、公开数据服务或商业产品必须重新核对数据商和原始网站的抓取、缓存、展示与再分发条款。
 
 ### 美股建议
 
@@ -1118,7 +1139,7 @@ stock-research-harness/
 
 短期优先级：
 
-1. 在现有 A 股 seed + BaoStock 采集器上增加官方公告/政策的增量发现、哈希和首次抓取时间。
+1. 在现有 A 股 seed + BaoStock/HiThink 采集器上增加官方公告/政策的增量发现、哈希和首次抓取时间。
 2. 在现有 SEC 采集器上增加发行人 IR、官方宏观与经过授权的行情 adapter。
 3. 用真实 forward snapshot 连续生成并盲评日报。
 4. 记录主题和标的后续验证结果，评估研究质量而不是只评估格式正确率。

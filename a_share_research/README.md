@@ -125,7 +125,7 @@ CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定
 
 ## 采集真实 A 股快照
 
-研究引擎运行时仍然只读取冻结 snapshot；联网发生在显式的 `collect-snapshot` 命令中。该命令把研究员维护的政策、公告、题材和候选 seed，与 BaoStock 不复权日线合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。
+研究引擎运行时仍然只读取冻结 snapshot；联网只发生在显式的 `collect-snapshot` 或 `provider-probe` 命令中。`collect-snapshot` 把研究员维护的政策、公告、题材和候选 seed，与选定 provider 的结构化市场数据合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。默认 provider 仍是 BaoStock；显式选择 `hithink` 时会使用同花顺 Financial API。
 
 先复制 [research_seed.example.json](config/research_seed.example.json)，删除 `example_notice`，并把所有合成名称、URL、结论和人工复核项换成你已核验的真实内容。示例文件和仍含 `example.invalid`、`EXAMPLE_ONLY`、`[合成示例]` 等标记的副本会被采集器拒绝；seed 也不能预填行情或 `market_evidence_refs`。候选身份必须满足例如 `symbol=600000` 对应 `security_id=CN.SH.600000`。
 
@@ -137,10 +137,53 @@ uv run a-share-research \
   --workspace ~/ai/stock \
   collect-snapshot \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider baostock \
   --snapshot-id "cn-$(date +%Y%m%d)-manual-v1"
 ```
 
 BaoStock 没有不可变的 first-seen/vintage 语义，因此这些快照固定标记为 `RECONSTRUCTED_NON_PIT`。生产 CLI 始终使用采集时的系统时钟，不提供人为覆盖 `retrieved_at` 的参数。命令不会自动抓取巨潮或政策正文；官方证据仍由研究员在 seed 中提供并负责授权与准确性。
+
+### 使用 HiThink Financial API
+
+HiThink 接入位于采集层，不改变研究引擎和 DSH 工具。API Key 唯一允许的入口是环境变量 `HITHINK_FINANCE_API_KEY`；不要把它放进 seed、命令行、plist、仓库或报告。先做一次显式联网探针，再采集：
+
+```bash
+cd ~/ai/stock/a_share_research
+uv sync
+export HITHINK_FINANCE_API_KEY='你的 API Key'
+
+uv run a-share-research provider-probe \
+  --provider hithink \
+  --symbol 600519.SH
+
+uv run a-share-research \
+  --workspace ~/ai/stock \
+  collect-snapshot \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
+  --snapshot-id "cn-$(date +%Y%m%d)-hithink-v1"
+```
+
+`provider-probe` 只返回 provider、endpoint、request ID、抓取时间、响应哈希和 opaque raw artifact ID，不回显价格、响应正文或 Key。`doctor` 仍完全离线。
+
+HiThink 模式会采集：
+
+- 候选股和上证综指、深证成指、创业板指的不复权日线；
+- 全市场上涨、下跌、平盘、无成交家数和成交额；
+- 涨停、跌停、炸板池及候选命中；
+- 候选最新估值快照；
+- 候选最近两个可对齐年度的利润表、资产负债表和现金流量表字段。
+
+所有 provider 缺失值都保留为 `UNKNOWN`，财务三表只在相同 `period_end` 上连接；供应商给出的涨停原因只是 `provider_derived_unverified`，不能替代公司公告。HiThink 的结构化数据始终标为 `structured_market`，不会满足“至少一条官方证据”的门槛。
+
+成功响应会以不可覆盖方式保存到仓库外的私有审计目录。默认位置为：
+
+- macOS：`~/Library/Application Support/stock-research-harness/raw/cn/hithink`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/stock-research-harness/raw/cn/hithink`
+
+可用 `--raw-store-root /absolute/private/path` 或 `STOCK_RESEARCH_RAW_STORE` 覆盖；解析后的目录如果位于源码仓库内会被拒绝。raw store 保存响应正文只为本地审计，不会进入 snapshot、报告、DSH session 或 Git。
+
+HiThink 没有公开不可变 first-seen/vintage 契约，最新估值也不能冒充历史估值。因此即使启用原始响应审计，快照仍是 `RECONSTRUCTED_NON_PIT`，不能用于宣称严格历史 PIT 回放。
 
 ## 每日完整报告与 macOS 调度
 
@@ -150,6 +193,7 @@ BaoStock 没有不可变的 first-seen/vintage 语义，因此这些快照固定
 bash ~/ai/stock/scripts/run_cn_daily.sh \
   --root ~/ai/stock \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
   --snapshot-id "cn-$(date +%Y%m%d)-daily-v1" \
   --top-n 9
 ```
@@ -160,10 +204,11 @@ bash ~/ai/stock/scripts/run_cn_daily.sh \
 bash ~/ai/stock/scripts/install_cn_launchd.sh \
   --root /Users/yourname/ai/stock \
   --seed-json /Users/yourname/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
   --load
 ```
 
-wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decision_at` 早于实际抓取时间，会在研究运行前失败。日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
+wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decision_at` 早于实际抓取时间，会在研究运行前失败。`--provider hithink` 时，调用环境必须已经包含 `HITHINK_FINANCE_API_KEY`。macOS LaunchAgent 不读取 `~/.zshrc`，安装器也不会把 Key 写进 plist；应由你自己的 Keychain/登录会话秘密注入机制把该变量提供给 launchd，否则任务会安全失败。日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
 
 ## DeepSeek Harness
 
@@ -176,6 +221,6 @@ wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decisio
 
 ## 当前边界
 
-`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 会联网访问 BaoStock。当前采集器只补候选和三只宽基指数的日线，不提供全市场宽度、公告抓取、严格 PIT、自动主题发现或生产级授权行情。接入巨潮、交易所、Tushare 或商业行情前，需要逐一确认授权、时间语义和快照策略。
+`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值和年度三表，但仍不提供官方公告抓取、严格 PIT、自动主题发现或数据再分发授权。HiThink 仓库代码采用 MIT 并不自动授予其数据的商业使用或再分发权；对外产品必须按账户协议另行确认。
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。

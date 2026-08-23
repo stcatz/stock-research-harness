@@ -46,7 +46,16 @@
 - 北交所公告：`https://www.bse.cn/disclosure/announcement.html`
 - 公司官网、年报、招股书及监管问询回复
 
-行情和行业数据应使用有明确许可、时间戳和复权说明的数据源。论坛、社交媒体、新闻摘要只做线索，不做最终事实依据。
+行情和行业数据应使用有明确许可、时间戳和复权说明的数据源。当前 collector 支持 BaoStock 日线，以及显式 opt-in 的 HiThink Financial API 日线、全市场宽度、特色池、估值与年度三表。两者都缺少公开的不可变 first-seen/vintage 契约，因此只能标为 `RECONSTRUCTED_NON_PIT`；HiThink 的供应商原因标签和结构化财务数据也不能替代公告原文。论坛、社交媒体、新闻摘要只做线索，不做最终事实依据。
+
+外部 provider 必须经过以下边界后才能进入研究：
+
+1. 只允许显式 collector 联网，DSH 和 `run` 不得直连数据商。
+2. 先保存仓库外的私有原始响应与哈希，再标准化成 snapshot；snapshot 不携带响应正文或凭据。
+3. 以真实响应完成时间作为 `retrieved_at/available_at`，不得使用请求前时间或人工回填时间。
+4. 日线不复权；缺少除权参考价时 `preclose/pct_chg` 保持 `UNKNOWN`，不得由相邻未复权收盘伪造。
+5. 财务三表只能按相同 `period_end` 对齐，空值保留 `UNKNOWN`；最新估值不能用于历史估值回放。
+6. provider 数据只算 `structured_market`，最终候选仍必须具有独立的官方/一级证据。
 
 ## 4. 每日流程
 
