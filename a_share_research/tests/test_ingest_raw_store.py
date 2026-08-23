@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -64,6 +65,8 @@ class ImmutableRawStoreTests(unittest.TestCase):
             )
             self.assertEqual(os.stat(artifact.body_path).st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(artifact.manifest_path).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(store.root).st_mode & 0o777, 0o700)
+            self.assertEqual(os.stat(artifact.directory).st_mode & 0o777, 0o700)
             self.assertFalse(any(path.name.startswith(".tmp-") for path in store.root.iterdir()))
 
     def test_existing_artifact_is_never_overwritten(self) -> None:
@@ -78,6 +81,50 @@ class ImmutableRawStoreTests(unittest.TestCase):
 
             self.assertEqual(first.manifest_path.read_bytes(), original_manifest)
             self.assertEqual(first.body_path.read_bytes(), response.raw_body)
+
+    def test_symlink_root_is_rejected_without_rendering_the_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            target = base / "target"
+            target.mkdir()
+            linked_root = base / "provider_raw"
+            linked_root.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaises(RawStoreValidationError) as raised:
+                ImmutableRawStore(linked_root)
+
+            self.assertNotIn(str(base.resolve()), str(raised.exception))
+
+    def test_publish_fails_closed_if_root_path_is_replaced_by_a_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base = Path(temporary_directory)
+            root = base / "provider_raw"
+            store = ImmutableRawStore(root)
+            original_root = base / "provider_raw-original"
+            root.rename(original_root)
+            attacker_directory = base / "attacker"
+            attacker_directory.mkdir()
+            root.symlink_to(attacker_directory, target_is_directory=True)
+
+            with self.assertRaises(RawStoreValidationError) as raised:
+                store.publish(_response())
+
+            self.assertEqual(list(attacker_directory.iterdir()), [])
+            self.assertNotIn(str(base.resolve()), str(raised.exception))
+
+    def test_broken_symlink_at_artifact_name_is_not_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "provider_raw"
+            store = ImmutableRawStore(root)
+            response = _response()
+            artifact = store.publish(response)
+            shutil.rmtree(artifact.directory)
+            artifact.directory.symlink_to(Path(temporary_directory) / "missing-target")
+
+            with self.assertRaises(RawStoreCollisionError):
+                store.publish(response)
+
+            self.assertTrue(artifact.directory.is_symlink())
 
     def test_manifest_rejects_sensitive_url_and_path_parameters(self) -> None:
         unsafe_params = (

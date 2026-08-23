@@ -237,6 +237,47 @@ class HiThinkClientTests(unittest.TestCase):
                 sleeper=lambda _: None,
             ).get("/api/meta/tickers")
 
+    def test_content_type_must_be_exact_application_json_and_may_include_charset(self) -> None:
+        rejected_headers = (
+            {},
+            {"Content-Type": ""},
+            {"Content-Type": "application/problem+json"},
+            {"Content-Type": "text/plain; application/json"},
+            {"Content-Type": "application/json-patch+json"},
+        )
+        for headers in rejected_headers:
+            with self.subTest(headers=headers):
+                client = HiThinkClient(
+                    api_key=self.api_key,
+                    transport=_QueueTransport(
+                        HiThinkHttpResponse(status=200, headers=headers, body=_body(data={}))
+                    ),
+                    clock=lambda: self.now,
+                    sleeper=lambda _: None,
+                )
+                with self.assertRaisesRegex(HiThinkProtocolError, "Content-Type"):
+                    client.get("/api/meta/tickers")
+
+        for content_type in (
+            "application/json",
+            "application/json; charset=utf-8",
+            " Application/JSON ; Charset=UTF-8 ",
+        ):
+            with self.subTest(content_type=content_type):
+                result = HiThinkClient(
+                    api_key=self.api_key,
+                    transport=_QueueTransport(
+                        HiThinkHttpResponse(
+                            status=200,
+                            headers={"content-type": content_type},
+                            body=_body(data={}),
+                        )
+                    ),
+                    clock=lambda: self.now,
+                    sleeper=lambda _: None,
+                ).get("/api/meta/tickers")
+                self.assertEqual(result.data, {})
+
     def test_endpoint_and_parameters_cannot_escape_origin_or_persist_secrets(self) -> None:
         client = HiThinkClient(
             api_key=self.api_key,

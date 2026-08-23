@@ -7,8 +7,8 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import tempfile
+import secrets
+import stat
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -66,10 +66,24 @@ class ImmutableRawStore:
     """
 
     def __init__(self, root: Path | str) -> None:
-        self.root = Path(root).expanduser()
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not self.root.is_dir():
-            raise RawStoreValidationError("raw store root must be a directory")
+        expanded = Path(root).expanduser()
+        self.root = Path(os.path.abspath(os.fspath(expanded)))
+        try:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError:
+            raise RawStoreValidationError("raw store root could not be created securely") from None
+        root_descriptor = _open_directory_path(self.root)
+        try:
+            os.fchmod(root_descriptor, 0o700)
+            root_stat = os.fstat(root_descriptor)
+            _verify_directory_identity(self.root, root_stat)
+            self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+        except RawStoreValidationError:
+            raise
+        except OSError:
+            raise RawStoreValidationError("raw store root could not be secured") from None
+        finally:
+            os.close(root_descriptor)
 
     def publish(self, response: HiThinkResponse) -> RawArtifact:
         metadata = _validated_metadata(response)
@@ -89,10 +103,6 @@ class ImmutableRawStore:
         ).encode("utf-8")
         identity_digest = hashlib.sha256(identity_material).hexdigest()
         artifact_id = f"hithink-{timestamp}-{identity_digest[:16]}"
-        final_directory = self.root / artifact_id
-        if final_directory.exists():
-            raise RawStoreCollisionError("raw response artifact already exists")
-
         manifest = {
             "schema_version": 1,
             "artifact_id": artifact_id,
@@ -112,24 +122,49 @@ class ImmutableRawStore:
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
 
-        temporary_directory = Path(tempfile.mkdtemp(prefix=".tmp-", dir=self.root))
+        root_descriptor = self._open_verified_root()
+        temporary_name: str | None = None
+        temporary_descriptor: int | None = None
+        published = False
         try:
-            body_path = temporary_directory / "body.json"
-            manifest_path = temporary_directory / "manifest.json"
-            _write_exclusive(body_path, response.raw_body)
-            _write_exclusive(manifest_path, manifest_bytes)
-            _fsync_directory(temporary_directory)
+            if _entry_exists(root_descriptor, artifact_id):
+                raise RawStoreCollisionError("raw response artifact already exists")
+            temporary_name = _make_private_temporary_directory(root_descriptor)
+            temporary_descriptor = _open_directory_at(root_descriptor, temporary_name)
+            os.fchmod(temporary_descriptor, 0o700)
+            _write_exclusive_at(temporary_descriptor, "body.json", response.raw_body)
+            _write_exclusive_at(temporary_descriptor, "manifest.json", manifest_bytes)
+            os.fsync(temporary_descriptor)
+            if _entry_exists(root_descriptor, artifact_id):
+                raise RawStoreCollisionError("raw response artifact already exists")
             try:
-                os.rename(temporary_directory, final_directory)
+                os.rename(
+                    temporary_name,
+                    artifact_id,
+                    src_dir_fd=root_descriptor,
+                    dst_dir_fd=root_descriptor,
+                )
             except OSError as exc:
-                if exc.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                if exc.errno in {errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR} and _entry_exists(
+                    root_descriptor, artifact_id
+                ):
                     raise RawStoreCollisionError("raw response artifact already exists") from None
                 raise
-            _fsync_directory(self.root)
-        except Exception:
-            if temporary_directory.exists():
-                shutil.rmtree(temporary_directory)
+            published = True
+            os.fsync(root_descriptor)
+            self._verify_open_root(root_descriptor)
+        except (RawStoreCollisionError, RawStoreValidationError):
             raise
+        except OSError:
+            raise RawStoreError("raw response artifact could not be published securely") from None
+        finally:
+            if temporary_descriptor is not None:
+                os.close(temporary_descriptor)
+            if temporary_name is not None and not published:
+                _remove_private_temporary_directory(root_descriptor, temporary_name)
+            os.close(root_descriptor)
+
+        final_directory = self.root / artifact_id
 
         return RawArtifact(
             artifact_id=artifact_id,
@@ -137,6 +172,25 @@ class ImmutableRawStore:
             body_path=final_directory / "body.json",
             manifest_path=final_directory / "manifest.json",
         )
+
+    def _open_verified_root(self) -> int:
+        descriptor = _open_directory_path(self.root)
+        try:
+            self._verify_open_root(descriptor)
+            os.fchmod(descriptor, 0o700)
+        except RawStoreValidationError:
+            os.close(descriptor)
+            raise
+        except OSError:
+            os.close(descriptor)
+            raise RawStoreValidationError("raw store root could not be secured") from None
+        return descriptor
+
+    def _verify_open_root(self, descriptor: int) -> None:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != self._root_identity:
+            raise RawStoreValidationError("raw store root identity changed")
+        _verify_directory_identity(self.root, opened)
 
 
 def _validated_metadata(response: HiThinkResponse) -> dict[str, Any]:
@@ -199,17 +253,88 @@ def _looks_like_url_or_absolute_path(value: str) -> bool:
     return decoded.startswith(("/", "~/")) or PureWindowsPath(decoded).is_absolute()
 
 
-def _write_exclusive(path: Path, content: bytes) -> None:
-    with path.open("xb") as handle:
-        os.chmod(path, 0o600)
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
+def _open_directory_path(path: Path) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
     try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        raise RawStoreValidationError("raw store root must be a non-symlink directory") from None
+    opened = os.fstat(descriptor)
+    if not stat.S_ISDIR(opened.st_mode):
+        os.close(descriptor)
+        raise RawStoreValidationError("raw store root must be a non-symlink directory")
+    return descriptor
+
+
+def _verify_directory_identity(path: Path, opened: os.stat_result) -> None:
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError:
+        raise RawStoreValidationError("raw store root identity changed") from None
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+        opened.st_dev,
+        opened.st_ino,
+    ):
+        raise RawStoreValidationError("raw store root identity changed")
+
+
+def _open_directory_at(parent_descriptor: int, name: str) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    return os.open(name, flags, dir_fd=parent_descriptor)
+
+
+def _entry_exists(parent_descriptor: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _make_private_temporary_directory(root_descriptor: int) -> str:
+    for _ in range(32):
+        name = f".tmp-{secrets.token_hex(12)}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=root_descriptor)
+        except FileExistsError:
+            continue
+        return name
+    raise RawStoreError("raw response temporary artifact name could not be allocated")
+
+
+def _write_exclusive_at(directory_descriptor: int, name: str, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_descriptor)
+    try:
+        os.fchmod(descriptor, 0o600)
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "short raw artifact write")
+            remaining = remaining[written:]
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _remove_private_temporary_directory(root_descriptor: int, name: str) -> None:
+    try:
+        temporary_descriptor = _open_directory_at(root_descriptor, name)
+    except OSError:
+        return
+    try:
+        for child in ("body.json", "manifest.json"):
+            try:
+                os.unlink(child, dir_fd=temporary_descriptor)
+            except OSError:
+                pass
+    finally:
+        os.close(temporary_descriptor)
+    try:
+        os.rmdir(name, dir_fd=root_descriptor)
+    except OSError:
+        pass

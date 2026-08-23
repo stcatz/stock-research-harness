@@ -409,7 +409,10 @@ def _validate_http_response_shape(response: Any) -> None:
 
 def _require_json_content_type(headers: Mapping[str, str]) -> None:
     value = _header_value(headers, "content-type")
-    if value is not None and "application/json" not in value.casefold():
+    if value is None or any(character in value for character in ("\r", "\n", "\x00")):
+        raise HiThinkProtocolError("HiThink returned a non-JSON Content-Type")
+    media_type = value.split(";", 1)[0].strip().casefold()
+    if media_type != "application/json":
         raise HiThinkProtocolError("HiThink returned a non-JSON Content-Type")
 
 
