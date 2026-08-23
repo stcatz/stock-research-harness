@@ -53,6 +53,7 @@ class PipelineTests(unittest.TestCase):
         report = (run_dir / "report.md").read_text(encoding="utf-8")
         self.assertIn("安装测试数据", report)
         self.assertIn(DISCLAIMER, report)
+        self.assertIn("生效时间", report)
         self.assertNotIn("建议买入", report)
         self.assertNotIn("目标价", report)
 

@@ -41,6 +41,7 @@
           "title",
           "source_url",
           "published_at",
+          "effective_at",
           "available_at",
           "retrieved_at",
           "as_of",
@@ -50,7 +51,37 @@
           "source_level": {
             "enum": ["official", "structured_market", "industry", "secondary"]
           },
-          "source_url": { "type": "string", "format": "uri" }
+          "source_url": { "type": "string", "format": "uri" },
+          "effective_at": { "type": "string", "format": "date-time" },
+          "facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "fact_id",
+                "metric",
+                "value",
+                "unit",
+                "status",
+                "as_of",
+                "effective_at",
+                "available_at",
+                "source_field"
+              ],
+              "properties": {
+                "fact_id": { "type": "string" },
+                "metric": { "type": "string" },
+                "value": { "type": ["string", "null"] },
+                "unit": { "type": "string" },
+                "status": { "enum": ["observed", "unknown"] },
+                "as_of": { "type": "string", "format": "date-time" },
+                "effective_at": { "type": "string", "format": "date-time" },
+                "available_at": { "type": "string", "format": "date-time" },
+                "source_field": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },

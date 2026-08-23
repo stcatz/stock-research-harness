@@ -88,6 +88,52 @@ class SnapshotContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "timezone"):
             validate_snapshot(invalid)
 
+    def test_all_evidence_requires_an_explicit_effective_time(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        del invalid["evidence"][0]["effective_at"]
+        with self.assertRaisesRegex(ContractError, "effective_at"):
+            validate_snapshot(invalid)
+
+    def test_structured_facts_preserve_unknown_and_reject_fabricated_values(self) -> None:
+        valid = copy.deepcopy(self.demo)
+        valid["evidence"][0]["facts"] = [
+            {
+                "fact_id": "FACT-TURNOVER-UNKNOWN",
+                "metric": "turnover_rate",
+                "value": None,
+                "unit": "percent",
+                "status": "unknown",
+                "as_of": "2026-08-15T15:00:00+08:00",
+                "effective_at": "2026-08-15T15:00:00+08:00",
+                "available_at": "2026-08-15T15:20:00+08:00",
+                "source_field": "turnover_rate",
+            }
+        ]
+        self.assertIsNone(validate_snapshot(valid).data["evidence"][0]["facts"][0]["value"])
+
+        invalid = copy.deepcopy(valid)
+        invalid["evidence"][0]["facts"][0]["value"] = "0"
+        with self.assertRaisesRegex(ContractError, "must be null"):
+            validate_snapshot(invalid)
+
+    def test_structured_fact_cannot_be_available_after_its_evidence(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][0]["facts"] = [
+            {
+                "fact_id": "FACT-LATE",
+                "metric": "pe_ttm",
+                "value": "12.4",
+                "unit": "ratio",
+                "status": "observed",
+                "as_of": "2026-08-15T15:00:00+08:00",
+                "effective_at": "2026-08-15T15:00:00+08:00",
+                "available_at": "2026-08-16T08:00:00+08:00",
+                "source_field": "pe_ttm",
+            }
+        ]
+        with self.assertRaisesRegex(ContractError, "its evidence available_at"):
+            validate_snapshot(invalid)
+
     def test_snapshot_cannot_claim_data_retrieved_after_its_own_capture(self) -> None:
         invalid = copy.deepcopy(self.demo)
         invalid["retrieved_at"] = "2026-08-16T07:30:00+08:00"

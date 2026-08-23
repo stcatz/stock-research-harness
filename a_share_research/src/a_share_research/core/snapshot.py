@@ -29,6 +29,7 @@ from .utils import read_json, sha256_value
 PIT_QUALITIES = {"P1", "P2", "P3", "RECONSTRUCTED_NON_PIT", "FIXTURE"}
 DATA_MODES = {"snapshot", "fixture"}
 ROLES = {"core", "midcap", "elastic", "follower"}
+FACT_STATUSES = {"observed", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,7 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
         published_at = parse_datetime(
             evidence.get("published_at"), f"evidence[{index}].published_at"
         )
+        parse_datetime(evidence.get("effective_at"), f"evidence[{index}].effective_at")
         available_at = parse_datetime(
             evidence.get("available_at"), f"evidence[{index}].available_at"
         )
@@ -135,6 +137,7 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
             raise ContractError(
                 f"evidence[{index}].retrieved_at must not be later than snapshot.retrieved_at"
             )
+        _validate_facts(evidence.get("facts", []), index, available_at, retrieved_at)
         evidence_by_id[evidence_id] = evidence
     ensure_unique((item["evidence_id"] for item in evidence_items), "snapshot.evidence")
     _validate_market_context(data.get("market_context"), evidence_by_id)
@@ -158,6 +161,53 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
         themes=themes,
         snapshot_hash=sha256_value(normalized),
     )
+
+
+def _validate_facts(
+    raw: Any,
+    evidence_index: int,
+    evidence_available_at: datetime,
+    evidence_retrieved_at: datetime,
+) -> None:
+    """Validate deterministic structured facts embedded in one evidence record.
+
+    Facts stay subordinate to their source evidence.  Values are strings so provider decimals
+    are never silently rounded through a binary JSON float; missing inputs are represented by
+    ``status=unknown`` and ``value=null`` rather than by a fabricated zero.
+    """
+
+    field = f"evidence[{evidence_index}].facts"
+    facts = require_list(raw, field)
+    fact_ids: list[str] = []
+    for fact_index, raw_fact in enumerate(facts):
+        prefix = f"{field}[{fact_index}]"
+        fact = require_mapping(raw_fact, prefix)
+        fact_ids.append(require_string(fact.get("fact_id"), f"{prefix}.fact_id"))
+        require_string(fact.get("metric"), f"{prefix}.metric")
+        require_string(fact.get("unit"), f"{prefix}.unit")
+        require_string(fact.get("source_field"), f"{prefix}.source_field")
+        status = require_string(fact.get("status"), f"{prefix}.status")
+        if status not in FACT_STATUSES:
+            raise ContractError(f"{prefix}.status must be one of {sorted(FACT_STATUSES)}")
+        value = fact.get("value")
+        if status == "observed":
+            require_string(value, f"{prefix}.value")
+        elif value is not None:
+            raise ContractError(f"{prefix}.value must be null when status=unknown")
+        fact_as_of = parse_datetime(fact.get("as_of"), f"{prefix}.as_of")
+        parse_datetime(fact.get("effective_at"), f"{prefix}.effective_at")
+        fact_available_at = parse_datetime(fact.get("available_at"), f"{prefix}.available_at")
+        if fact_as_of > fact_available_at:
+            raise ContractError(f"{prefix}.as_of must not be later than available_at")
+        if fact_available_at > evidence_available_at:
+            raise ContractError(
+                f"{prefix}.available_at must not be later than its evidence available_at"
+            )
+        if fact_available_at > evidence_retrieved_at:
+            raise ContractError(
+                f"{prefix}.available_at must not be later than its evidence retrieved_at"
+            )
+    ensure_unique(fact_ids, field)
 
 
 def _validate_market_context(raw: Any, evidence_by_id: Mapping[str, Any]) -> None:

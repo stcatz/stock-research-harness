@@ -145,8 +145,15 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
         lines.append(
             f"- [{evidence['title']}]({evidence['source_url']}) — "
             f"等级 `{evidence['source_level']}`；可用时间 {evidence['available_at']}；"
-            f"适用时间 {evidence['as_of']}；{evidence['summary']}"
+            f"生效时间 {evidence['effective_at']}；适用时间 {evidence['as_of']}；"
+            f"{evidence['summary']}"
         )
+        for fact in evidence.get("facts", []):
+            value = fact["value"] if fact["status"] == "observed" else "UNKNOWN"
+            lines.append(
+                f"  - `{fact['metric']}` = {value} {fact['unit']}；"
+                f"状态 `{fact['status']}`；适用时间 {fact['as_of']}"
+            )
     if not candidate["evidence"]:
         lines.append("- 未知：没有研究时点前可用的证据。")
 

@@ -337,10 +337,12 @@ def _evidence_card(evidence: dict[str, Any]) -> dict[str, Any]:
         "title": evidence["title"],
         "source_url": evidence["source_url"],
         "published_at": evidence["published_at"],
+        "effective_at": evidence["effective_at"],
         "available_at": evidence["available_at"],
         "retrieved_at": evidence["retrieved_at"],
         "as_of": evidence["as_of"],
         "summary": evidence["summary"],
+        "facts": deepcopy(evidence.get("facts", [])),
     }
 
 
