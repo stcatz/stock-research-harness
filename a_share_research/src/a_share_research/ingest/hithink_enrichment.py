@@ -198,9 +198,16 @@ class FullMarketBreadth:
     def evidence_id(self) -> str:
         return f"MKT-HITHINK-BREADTH-{self.latest_session:%Y%m%d}"
 
+    @property
+    def observed_at(self) -> datetime:
+        """Return when the last page of the current snapshot was observed locally."""
+
+        return max(source.retrieved_at for source in self.sources)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "latest_session": self.latest_session.isoformat(),
+            "observed_at": self.observed_at.isoformat(),
             "upstream_timestamp_ms": self.upstream_timestamp_ms,
             "total": self.total,
             "advancing": self.advancing,
@@ -280,10 +287,17 @@ class CandidateValuation:
     def evidence_id(self) -> str:
         return f"MKT-HITHINK-VALUATION-{_safe_code(self.thscode)}-{self.latest_session:%Y%m%d}"
 
+    @property
+    def observed_at(self) -> datetime:
+        """Return the local observation boundary for this current-snapshot query."""
+
+        return self.source.retrieved_at
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "thscode": self.thscode,
             "name": self.name,
+            "observed_at": self.observed_at.isoformat(),
             "facts": [fact.to_dict() for fact in self.facts],
             "source": self.source.to_dict(),
         }
@@ -501,8 +515,6 @@ def _collect_full_market_breadth(
         assert timestamp is not None
         source = _replace_gateway_source(gateway, source, timestamp)
         sources.append(source)
-        if _shanghai_date_from_ms(timestamp, "prices snapshot.timestamp") != latest_session:
-            raise HiThinkEnrichmentError("prices snapshot timestamp does not match latest_session")
         total = _nonnegative_int(data.get("total"), "prices snapshot.total")
         if total == 0:
             raise HiThinkEnrichmentError("prices snapshot has zero full-market coverage")
@@ -689,8 +701,6 @@ def _collect_one_pool(
         assert timestamp is not None
         source = _replace_gateway_source(gateway, source, timestamp)
         sources.append(source)
-        if _shanghai_date_from_ms(timestamp, f"{pool} pool.timestamp") != latest_session:
-            raise HiThinkEnrichmentError(f"{pool} pool timestamp does not match latest_session")
         pagination = _mapping(data.get("pagination"), f"{pool}.pagination")
         total = _nonnegative_int(pagination.get("total"), f"{pool}.pagination.total")
         pages = _nonnegative_int(pagination.get("pages"), f"{pool}.pagination.pages")
@@ -745,13 +755,8 @@ def _collect_valuations(
             HITHINK_VALUATIONS_ENDPOINT,
             {"thscodes": ",".join(batch)},
         )
-        timestamp = _upstream_timestamp(data, "valuations snapshot", allow_none=False)
-        assert timestamp is not None
+        timestamp = _upstream_timestamp(data, "valuations snapshot", allow_none=True)
         source = _replace_gateway_source(gateway, source, timestamp)
-        if _shanghai_date_from_ms(timestamp, "valuations snapshot.timestamp") != latest_session:
-            raise HiThinkEnrichmentError(
-                "valuations snapshot timestamp does not match latest_session"
-            )
         total = _nonnegative_int(data.get("total"), "valuations snapshot.total")
         items = _items(data, "valuations snapshot")
         if total != len(items):
@@ -766,7 +771,10 @@ def _collect_valuations(
                 raise HiThinkEnrichmentError(f"valuations contains duplicate thscode: {code}")
             rows[code] = item
 
-        as_of = _session_close(latest_session)
+        # This endpoint has no historical/session selector. Its response-level timestamp is
+        # the latest valid upstream time across five metrics and is not a per-row timestamp.
+        # The only honest, consistent row observation boundary is therefore local retrieval.
+        as_of = source.retrieved_at
         for code in batch:
             row = rows.get(code)
             name = (
@@ -946,7 +954,10 @@ def _parse_statement_row(
 
 
 def _breadth_evidence(breadth: FullMarketBreadth) -> dict[str, Any]:
-    as_of = _session_close(breadth.latest_session)
+    # The endpoint is a current, multi-page snapshot. Its upstream timestamp means latest
+    # valid data time, not an official session close. Use collection completion as the
+    # aggregate observation boundary and retain all upstream values only as provenance.
+    as_of = breadth.observed_at
     available_at = max(source.retrieved_at for source in breadth.sources)
     values = (
         ("advancing_count", breadth.advancing, "count"),
@@ -974,7 +985,7 @@ def _breadth_evidence(breadth: FullMarketBreadth) -> dict[str, Any]:
     )
     return _evidence(
         evidence_id=breadth.evidence_id,
-        title=f"同花顺全市场行情宽度：{breadth.latest_session.isoformat()}",
+        title=f"同花顺当前全市场行情宽度：本地观测于 {as_of.isoformat()}",
         summary=(
             f"覆盖 {breadth.total} 只 A 股；上涨 {breadth.advancing}、"
             f"下跌 {breadth.declining}、平盘 {breadth.unchanged}、"
@@ -986,7 +997,15 @@ def _breadth_evidence(breadth: FullMarketBreadth) -> dict[str, Any]:
         available_at=available_at,
         sources=breadth.sources,
         facts=facts,
-        provider_extra={"coverage": "full_market", "classification_rule": "volume>0"},
+        provider_extra={
+            "coverage": "full_market",
+            "classification_rule": "volume>0",
+            "session_context": breadth.latest_session.isoformat(),
+            "observation_semantics": "multi_page_current_snapshot_at_last_local_retrieval",
+            "upstream_timestamp_semantics": (
+                "response-level latest valid data time; not a trading-session or EOD boundary"
+            ),
+        },
     )
 
 
@@ -1018,7 +1037,13 @@ def _pool_summary_evidence(summary: SpecialPoolSummary) -> dict[str, Any]:
         available_at=available_at,
         sources=summary.sources,
         facts=facts,
-        provider_extra={"reason_classification": "provider_derived_unverified"},
+        provider_extra={
+            "reason_classification": "provider_derived_unverified",
+            "session_selection": summary.latest_session.isoformat(),
+            "upstream_timestamp_semantics": (
+                "provider data-ready time; not the selected trading date or fact effective_at"
+            ),
+        },
     )
 
 
@@ -1042,12 +1067,16 @@ def _pool_record_evidence(record: CandidatePoolRecord) -> dict[str, Any]:
             "provider_reason": record.provider_reason,
             "reason_classification": "provider_derived_unverified",
             "official_evidence": False,
+            "session_selection": record.latest_session.isoformat(),
+            "upstream_timestamp_semantics": (
+                "provider data-ready time; not the selected trading date or fact effective_at"
+            ),
         },
     )
 
 
 def _valuation_evidence(record: CandidateValuation) -> dict[str, Any]:
-    as_of = _session_close(record.latest_session)
+    as_of = record.observed_at
     observed = sum(fact.status == "observed" for fact in record.facts)
     return _evidence(
         evidence_id=record.evidence_id,
@@ -1058,7 +1087,17 @@ def _valuation_evidence(record: CandidateValuation) -> dict[str, Any]:
         available_at=record.source.retrieved_at,
         sources=(record.source,),
         facts=record.facts,
-        provider_extra={"instrument": record.thscode, "name": record.name},
+        provider_extra={
+            "instrument": record.thscode,
+            "name": record.name,
+            "session_context": record.latest_session.isoformat(),
+            "observation_semantics": "current_snapshot_at_local_retrieval",
+            "upstream_timestamp_scope": "response_global_not_per_row",
+            "upstream_timestamp_semantics": (
+                "latest valid upstream time across the five requested metrics; null is "
+                "preserved and no per-row time is inferred"
+            ),
+        },
     )
 
 
@@ -1204,13 +1243,21 @@ def _response_field(response: Any, field: str, *, required: bool = True) -> Any:
 def _replace_gateway_source(
     gateway: _Gateway, source: ProviderResponseRef, timestamp: int | None
 ) -> ProviderResponseRef:
+    if timestamp is not None:
+        upstream_at = _datetime_from_ms(timestamp, "provider response.timestamp")
+        if upstream_at > source.retrieved_at.astimezone(UTC):
+            raise HiThinkEnrichmentError(
+                "provider response.timestamp is later than retrieval time"
+            )
     enriched = replace(source, upstream_timestamp_ms=timestamp)
     gateway.sources[-1] = enriched
     return enriched
 
 
 def _upstream_timestamp(data: Mapping[str, Any], field: str, *, allow_none: bool) -> int | None:
-    value = data.get("timestamp")
+    if "timestamp" not in data:
+        raise HiThinkEnrichmentError(f"{field}.timestamp is missing")
+    value = data["timestamp"]
     if value is None and allow_none:
         return None
     return _positive_int(value, f"{field}.timestamp")
@@ -1318,10 +1365,6 @@ def _datetime_from_ms(value: int, field: str) -> datetime:
 
 def _datetime_to_ms(value: datetime) -> int:
     return int(value.timestamp() * 1000)
-
-
-def _shanghai_date_from_ms(value: int, field: str) -> date:
-    return _datetime_from_ms(value, field).astimezone(SHANGHAI_TZ).date()
 
 
 def _session_close(value: date) -> datetime:

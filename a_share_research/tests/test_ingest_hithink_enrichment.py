@@ -484,28 +484,133 @@ class HiThinkEnrichmentTests(unittest.TestCase):
                 page_size=2,
             )
 
-    def test_session_scoped_enrichment_rejects_missing_or_wrong_session_timestamps(self) -> None:
-        mutations = ("pool_wrong_session", "valuation_missing", "valuation_wrong_session")
-        for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                responses = _valid_responses()
-                if mutation == "pool_wrong_session":
-                    for response in responses[HITHINK_POOL_ENDPOINTS["limit_up"]]:
-                        response.data["timestamp"] += 24 * 60 * 60 * 1000
-                elif mutation == "valuation_missing":
-                    responses[HITHINK_VALUATIONS_ENDPOINT][0].data.pop("timestamp")
-                else:
-                    responses[HITHINK_VALUATIONS_ENDPOINT][0].data["timestamp"] += (
-                        24 * 60 * 60 * 1000
-                    )
+    def test_data_ready_timestamps_are_provenance_not_trading_session_boundaries(self) -> None:
+        responses = _valid_responses()
+        data_ready_ms = SESSION_TIMESTAMP_MS - 24 * 60 * 60 * 1000
+        for response in responses[HITHINK_POOL_ENDPOINTS["limit_up"]]:
+            response.data["timestamp"] = data_ready_ms
+        responses[HITHINK_VALUATIONS_ENDPOINT][0].data["timestamp"] = data_ready_ms
 
-                with self.assertRaisesRegex(HiThinkEnrichmentError, "timestamp|latest_session"):
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        self.assertTrue(
+            all(
+                source.upstream_timestamp_ms == data_ready_ms
+                for source in result.pool_summary.sources
+                if source.endpoint == HITHINK_POOL_ENDPOINTS["limit_up"]
+            )
+        )
+        valuation = result.valuations[0]
+        self.assertEqual(valuation.source.upstream_timestamp_ms, data_ready_ms)
+        self.assertTrue(
+            all(fact.as_of == valuation.source.retrieved_at for fact in valuation.facts)
+        )
+        valuation_evidence = next(
+            item
+            for item in result.evidence_fragments()
+            if item["evidence_id"] == valuation.evidence_id
+        )
+        self.assertEqual(valuation_evidence["as_of"], valuation.source.retrieved_at.isoformat())
+        self.assertEqual(
+            valuation_evidence["provider"]["upstream_timestamp_scope"],
+            "response_global_not_per_row",
+        )
+        pool_record = result.candidate_pool_records[0]
+        expected_pool_as_of = datetime.combine(SESSION, time(15, 0), tzinfo=SHANGHAI_TZ)
+        self.assertTrue(all(fact.as_of == expected_pool_as_of for fact in pool_record.facts))
+        pool_evidence = next(
+            item
+            for item in result.evidence_fragments()
+            if item["evidence_id"] == pool_record.evidence_id
+        )
+        self.assertEqual(pool_evidence["as_of"], expected_pool_as_of.isoformat())
+        self.assertIn("data-ready time", pool_evidence["provider"]["upstream_timestamp_semantics"])
+
+    def test_null_valuation_timestamp_is_preserved_without_fabricating_provenance(self) -> None:
+        responses = _valid_responses()
+        responses[HITHINK_VALUATIONS_ENDPOINT][0].data["timestamp"] = None
+
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        valuation = result.valuations[0]
+        self.assertIsNone(valuation.source.upstream_timestamp_ms)
+        facts = {fact.metric: fact for fact in valuation.facts}
+        self.assertEqual(facts["pe_ttm"].status, "observed")
+        self.assertEqual(facts["pe_ttm"].as_of, valuation.source.retrieved_at)
+        self.assertEqual(facts["pe_mrq"].status, "unknown")
+        self.assertEqual(facts["pe_mrq"].as_of, valuation.source.retrieved_at)
+
+    def test_missing_valuation_timestamp_fails_closed(self) -> None:
+        responses = _valid_responses()
+        responses[HITHINK_VALUATIONS_ENDPOINT][0].data.pop("timestamp")
+
+        with self.assertRaisesRegex(HiThinkEnrichmentError, "timestamp is missing"):
+            collect_hithink_enrichment(
+                _QueueClient(responses),
+                latest_session=SESSION,
+                candidate_thscodes=["600519.SH"],
+                page_size=2,
+            )
+
+    def test_every_non_null_upstream_timestamp_must_not_be_in_the_future(self) -> None:
+        endpoint_mutations = (
+            HITHINK_PRICES_SNAPSHOT_ENDPOINT,
+            HITHINK_POOL_ENDPOINTS["limit_up"],
+            HITHINK_VALUATIONS_ENDPOINT,
+            HITHINK_FINANCIAL_ENDPOINTS["income"],
+        )
+        for endpoint in endpoint_mutations:
+            with self.subTest(endpoint=endpoint):
+                responses = _valid_responses()
+                response = responses[endpoint][0]
+                response.data["timestamp"] = int(
+                    (response.retrieved_at.timestamp() + 1) * 1000
+                )
+
+                with self.assertRaisesRegex(HiThinkEnrichmentError, "later than retrieval"):
                     collect_hithink_enrichment(
                         _QueueClient(responses),
                         latest_session=SESSION,
                         candidate_thscodes=["600519.SH"],
                         page_size=2,
                     )
+
+    def test_full_market_snapshot_uses_local_observation_time_not_assumed_eod(self) -> None:
+        responses = _valid_responses()
+        # The upstream value is a latest-valid-data time, not a guarantee that the
+        # snapshot is an official 15:00 close for ``latest_session``.
+        upstream_ms = SESSION_TIMESTAMP_MS - 24 * 60 * 60 * 1000
+        for response in responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT]:
+            response.data["timestamp"] = upstream_ms
+
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        breadth_evidence = next(
+            item
+            for item in result.evidence_fragments()
+            if item["evidence_id"] == result.breadth.evidence_id
+        )
+        observed_at = max(source.retrieved_at for source in result.breadth.sources)
+        self.assertEqual(breadth_evidence["as_of"], observed_at.isoformat())
+        self.assertEqual(
+            breadth_evidence["provider"]["upstream_timestamp_semantics"],
+            "response-level latest valid data time; not a trading-session or EOD boundary",
+        )
 
     def test_response_metadata_extractor_supports_mapping_fakes(self) -> None:
         responses = _valid_responses()
