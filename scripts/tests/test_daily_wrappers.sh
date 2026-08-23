@@ -513,7 +513,20 @@ test_launchd_installer() {
 
   run_expect_failure "$TEST_TMP/relative.stdout" "$TEST_TMP/relative.stderr" \
     "$CN_INSTALLER" --root relative/path --seed-json "$seed"
-  pass "launchd installer is atomic, creates log parents, defaults to not loaded, and rejects relative roots"
+
+  symlink_root="$TEST_TMP/installer-symlink-repo"
+  symlink_home="$TEST_TMP/installer-symlink-home"
+  redirected_runtime="$TEST_TMP/redirected-runtime"
+  mkdir -p "$symlink_root/scripts" "$symlink_home" "$redirected_runtime"
+  cp "$CN_WRAPPER" "$symlink_root/scripts/run_cn_daily.sh"
+  chmod 700 "$symlink_root/scripts/run_cn_daily.sh"
+  ln -s "$redirected_runtime" "$symlink_root/.runtime"
+  run_expect_failure "$TEST_TMP/symlink.stdout" "$TEST_TMP/symlink.stderr" \
+    env HOME="$symlink_home" "$CN_INSTALLER" --root "$symlink_root" --seed-json "$seed"
+  [ -z "$(find "$redirected_runtime" -mindepth 1 -print -quit)" ] || \
+    fail "installer followed a symlinked runtime directory"
+  assert_contains 'symbolic link' "$TEST_TMP/symlink.stderr"
+  pass "launchd installer is atomic, defaults to not loaded, and rejects unsafe paths"
 }
 
 test_cn_success

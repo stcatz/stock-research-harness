@@ -176,7 +176,24 @@ validate_substitution_path "$SEED_JSON" "--seed-json"
 LOG_DIR="$ROOT/.runtime/logs"
 DESTINATION_DIR="$HOME_PATH/Library/LaunchAgents"
 DESTINATION="$DESTINATION_DIR/$LABEL.plist"
+
+reject_symbolic_link() {
+  candidate=$1
+  label=$2
+  if [ -L "$candidate" ]; then
+    die "refusing a symbolic link at $label"
+  fi
+}
+
+reject_symbolic_link "$ROOT/.runtime" "repository runtime directory"
+reject_symbolic_link "$LOG_DIR" "log directory"
+reject_symbolic_link "$HOME_PATH/Library" "user Library directory"
+reject_symbolic_link "$DESTINATION_DIR" "LaunchAgents directory"
 mkdir -p "$LOG_DIR" "$DESTINATION_DIR"
+reject_symbolic_link "$ROOT/.runtime" "repository runtime directory"
+reject_symbolic_link "$LOG_DIR" "log directory"
+reject_symbolic_link "$HOME_PATH/Library" "user Library directory"
+reject_symbolic_link "$DESTINATION_DIR" "LaunchAgents directory"
 chmod 700 "$LOG_DIR" "$DESTINATION_DIR"
 
 TEMP_PLIST=$(mktemp "$DESTINATION_DIR/.$LABEL.XXXXXX")
