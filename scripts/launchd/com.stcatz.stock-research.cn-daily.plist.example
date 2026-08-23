@@ -5,7 +5,7 @@
   <key>Label</key>
   <string>com.stcatz.stock-research.cn-daily</string>
 
-  <!-- Replace __ROOT__ and __SEED_JSON__ with absolute paths before loading. -->
+  <!-- The installer replaces __ROOT__, __SEED_JSON__ and __PROVIDER__. -->
   <key>ProgramArguments</key>
   <array>
     <string>__ROOT__/scripts/run_cn_daily.sh</string>
@@ -13,6 +13,8 @@
     <string>__ROOT__</string>
     <string>--seed-json</string>
     <string>__SEED_JSON__</string>
+    <string>--provider</string>
+    <string>__PROVIDER__</string>
   </array>
 
   <key>WorkingDirectory</key>

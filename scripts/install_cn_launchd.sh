@@ -12,7 +12,8 @@ LABEL=com.stcatz.stock-research.cn-daily
 usage() {
   cat <<'EOF'
 Usage:
-  install_cn_launchd.sh --root ABSOLUTE_PATH --seed-json ABSOLUTE_PATH [--load]
+  install_cn_launchd.sh --root ABSOLUTE_PATH --seed-json ABSOLUTE_PATH
+    [--provider baostock|hithink] [--load]
   install_cn_launchd.sh --self-test
 
 The installer renders the tracked launchd template, creates the log directory, and
@@ -41,7 +42,7 @@ run_self_test() {
   test_seed_dir=$(CDPATH= cd -- "$(dirname -- "$test_seed")" && pwd -P)
   test_seed="$test_seed_dir/$(basename -- "$test_seed")"
 
-  HOME=$test_home "$SELF" --root "$test_root" --seed-json "$test_seed" \
+  HOME=$test_home "$SELF" --root "$test_root" --seed-json "$test_seed" --provider hithink \
     >"$test_tmp/install.stdout"
   installed="$test_home/Library/LaunchAgents/$LABEL.plist"
   [ -f "$installed" ] || die "self-test failed: plist was not installed"
@@ -50,7 +51,9 @@ run_self_test() {
     die "self-test failed: root token was not rendered"
   grep -F "$test_seed" "$installed" >/dev/null || \
     die "self-test failed: seed token was not rendered"
-  if grep -E '__ROOT__|__SEED_JSON__' "$installed" >/dev/null; then
+  grep -F '<string>hithink</string>' "$installed" >/dev/null || \
+    die "self-test failed: provider token was not rendered"
+  if grep -E '__ROOT__|__SEED_JSON__|__PROVIDER__' "$installed" >/dev/null; then
     die "self-test failed: template tokens remain"
   fi
   if HOME=$test_home "$SELF" --root relative/path --seed-json "$test_seed" \
@@ -86,6 +89,7 @@ run_self_test() {
 ROOT_ARGUMENT=
 SEED_ARGUMENT=
 LOAD_AGENT=0
+PROVIDER=baostock
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -102,6 +106,11 @@ while [ "$#" -gt 0 ]; do
     --load)
       LOAD_AGENT=1
       shift
+      ;;
+    --provider)
+      [ "$#" -ge 2 ] || die "--provider requires a value"
+      PROVIDER=$2
+      shift 2
       ;;
     --self-test)
       [ "$#" -eq 1 ] || die "--self-test cannot be combined with other arguments"
@@ -131,6 +140,10 @@ esac
 [ -d "$ROOT_ARGUMENT" ] || die "repository root does not exist"
 [ -f "$SEED_ARGUMENT" ] || die "seed JSON does not exist"
 [ -f "$TEMPLATE" ] || die "launchd template is missing"
+case "$PROVIDER" in
+  baostock|hithink) ;;
+  *) die "--provider must be baostock or hithink" ;;
+esac
 
 ROOT=$(CDPATH= cd -- "$ROOT_ARGUMENT" && pwd -P)
 SEED_DIR=$(CDPATH= cd -- "$(dirname -- "$SEED_ARGUMENT")" && pwd -P)
@@ -178,8 +191,9 @@ trap 'exit 143' TERM
 sed \
   -e "s|__ROOT__|$ROOT|g" \
   -e "s|__SEED_JSON__|$SEED_JSON|g" \
+  -e "s|__PROVIDER__|$PROVIDER|g" \
   "$TEMPLATE" >"$TEMP_PLIST"
-if grep -E '__ROOT__|__SEED_JSON__' "$TEMP_PLIST" >/dev/null; then
+if grep -E '__ROOT__|__SEED_JSON__|__PROVIDER__' "$TEMP_PLIST" >/dev/null; then
   die "rendered plist still contains template tokens"
 fi
 command -v plutil >/dev/null 2>&1 || die "plutil is required on macOS"

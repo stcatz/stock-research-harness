@@ -14,6 +14,8 @@ Required:
   --seed-json PATH       Real, operator-maintained CN research seed JSON
 
 Options:
+  --provider NAME        Market provider: baostock or hithink (default: baostock)
+  --raw-store-root PATH  Private HiThink raw-response audit directory outside the repository
   --snapshot-id ID       Immutable snapshot ID (default: generated from local time)
   --decision-at ISO      Override the research cut-off (default: time after collection)
   --top-n N              Number of focus candidates, 1-20 (default: 9)
@@ -35,6 +37,8 @@ SEED_ARGUMENT=
 SNAPSHOT_ID=
 DECISION_AT=
 TOP_N=9
+PROVIDER=baostock
+RAW_STORE_ARGUMENT=
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -51,6 +55,16 @@ while [ "$#" -gt 0 ]; do
     --snapshot-id)
       [ "$#" -ge 2 ] || die "--snapshot-id requires a value"
       SNAPSHOT_ID=$2
+      shift 2
+      ;;
+    --provider)
+      [ "$#" -ge 2 ] || die "--provider requires a value"
+      PROVIDER=$2
+      shift 2
+      ;;
+    --raw-store-root)
+      [ "$#" -ge 2 ] || die "--raw-store-root requires a value"
+      RAW_STORE_ARGUMENT=$2
       shift 2
       ;;
     --decision-at)
@@ -81,6 +95,20 @@ done
 [ -n "$SEED_ARGUMENT" ] || die "--seed-json is required"
 [ -d "$ROOT_ARGUMENT" ] || die "repository root does not exist"
 [ -f "$SEED_ARGUMENT" ] || die "seed JSON does not exist"
+
+case "$PROVIDER" in
+  baostock|hithink) ;;
+  *) die "--provider must be baostock or hithink" ;;
+esac
+if [ -n "$RAW_STORE_ARGUMENT" ]; then
+  case "$RAW_STORE_ARGUMENT" in
+    /*) ;;
+    *) die "--raw-store-root must be an absolute path" ;;
+  esac
+fi
+if [ "$PROVIDER" = hithink ] && [ -z "${HITHINK_FINANCE_API_KEY:-}" ]; then
+  die "HITHINK_FINANCE_API_KEY is required for --provider hithink"
+fi
 
 ROOT=$(CDPATH= cd -- "$ROOT_ARGUMENT" && pwd -P)
 SEED_DIR=$(CDPATH= cd -- "$(dirname -- "$SEED_ARGUMENT")" && pwd -P)
@@ -226,7 +254,11 @@ COLLECT_ARGUMENTS=(
   collect-snapshot
   --seed-json "$SEED_JSON"
   --snapshot-id "$SNAPSHOT_ID"
+  --provider "$PROVIDER"
 )
+if [ -n "$RAW_STORE_ARGUMENT" ]; then
+  COLLECT_ARGUMENTS+=(--raw-store-root "$RAW_STORE_ARGUMENT")
+fi
 if ! "$PYTHON" -m a_share_research.cli "${COLLECT_ARGUMENTS[@]}" \
     >"$TMP_DIR/collect.json" 2>"$TMP_DIR/collect.stderr"; then
   die "snapshot collection failed; research was not started"

@@ -181,7 +181,56 @@ test_cn_success() {
   assert_contains '"section":"report"' "$request_prefix.a_share_research.cli.artifact"
   assert_contains '"max_chars":20000' "$request_prefix.a_share_research.cli.artifact"
   assert_contains 'REAL RESEARCH REPORT' "$root/stdout"
+  assert_contains '--provider baostock' "$call_log"
   pass "CN success uses the exact newly collected real snapshot and reads the full report"
+}
+
+test_cn_hithink_provider_is_explicit_and_secrets_are_not_arguments() {
+  root=$(new_root cn-hithink)
+  call_log="$root/calls.log"
+  request_prefix="$root/request"
+  raw_root="$TEST_TMP/private raw audit"
+  secret='hithink-secret-must-not-leak'
+  mkdir -p "$raw_root"
+  : >"$call_log"
+
+  if ! HITHINK_FINANCE_API_KEY=$secret MOCK_CALL_LOG=$call_log \
+    MOCK_REQUEST_LOG=$request_prefix \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --snapshot-id cn-20260818-test \
+      --decision-at 2026-08-18T12:31:00+00:00 \
+      --provider hithink \
+      --raw-store-root "$raw_root" \
+      >"$root/stdout" 2>"$root/stderr"; then
+    sed -n '1,120p' "$root/stderr" >&2
+    fail "CN HiThink provider case failed"
+  fi
+
+  assert_contains '--provider hithink' "$call_log"
+  assert_contains "--raw-store-root $raw_root" "$call_log"
+  assert_not_contains "$secret" "$call_log"
+  assert_not_contains "$secret" "$root/stdout"
+  assert_not_contains "$secret" "$root/stderr"
+  pass "CN wrapper explicitly selects HiThink without putting its API key in arguments or output"
+}
+
+test_cn_rejects_unknown_provider_before_python() {
+  root=$(new_root cn-bad-provider)
+  call_log="$root/calls.log"
+  : >"$call_log"
+
+  run_expect_failure "$root/stdout" "$root/stderr" \
+    env MOCK_CALL_LOG="$call_log" MOCK_REQUEST_LOG="$root/request" \
+    "$CN_WRAPPER" \
+      --root "$root" \
+      --seed-json "$root/seeds/cn.json" \
+      --provider invented-provider
+
+  [ ! -s "$call_log" ] || fail "invalid provider must fail before invoking Python"
+  assert_contains '--provider must be baostock or hithink' "$root/stderr"
+  pass "CN wrapper rejects unsupported providers before collection"
 }
 
 test_cn_collect_failure_short_circuits() {
@@ -427,6 +476,7 @@ test_launchd_example() {
   assert_contains '<integer>20</integer>' "$plist"
   assert_contains '<integer>30</integer>' "$plist"
   assert_contains 'run_cn_daily.sh' "$plist"
+  assert_contains '__PROVIDER__' "$plist"
   assert_not_contains '>dsh<' "$plist"
   pass "launchd example runs the standalone CN pipeline at 20:30 on weekdays"
 }
@@ -444,6 +494,7 @@ test_launchd_installer() {
   chmod 700 "$fake_root/scripts/run_cn_daily.sh"
   printf '{"themes":[],"candidates":[]}\n' >"$seed"
   HOME=$fake_home "$CN_INSTALLER" --root "$fake_root" --seed-json "$seed" \
+    --provider hithink \
     >"$TEST_TMP/installer.stdout"
 
   installed="$fake_home/Library/LaunchAgents/com.stcatz.stock-research.cn-daily.plist"
@@ -455,6 +506,8 @@ test_launchd_installer() {
   assert_contains "$canonical_seed" "$installed"
   assert_not_contains '__ROOT__' "$installed"
   assert_not_contains '__SEED_JSON__' "$installed"
+  assert_not_contains '__PROVIDER__' "$installed"
+  assert_contains '<string>hithink</string>' "$installed"
   [ -d "$fake_root/.runtime/logs" ] || fail "installer did not create the launchd log directory"
   assert_contains 'not loaded' "$TEST_TMP/installer.stdout"
 
@@ -464,6 +517,8 @@ test_launchd_installer() {
 }
 
 test_cn_success
+test_cn_hithink_provider_is_explicit_and_secrets_are_not_arguments
+test_cn_rejects_unknown_provider_before_python
 test_cn_collect_failure_short_circuits
 test_cn_lock_rejects_overlap
 test_cn_rejects_public_retrieved_at_override
