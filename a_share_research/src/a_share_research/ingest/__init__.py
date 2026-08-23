@@ -23,6 +23,7 @@ from .market_data import (
 from .snapshot_builder import (
     SnapshotCollectionResult,
     collect_cn_snapshot,
+    probe_hithink_provider,
     validate_research_seed,
 )
 
@@ -44,5 +45,6 @@ __all__ = [
     "collect_cn_snapshot",
     "normalize_baostock_symbol",
     "normalize_cn_symbol",
+    "probe_hithink_provider",
     "validate_research_seed",
 ]

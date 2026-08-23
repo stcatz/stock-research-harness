@@ -11,7 +11,7 @@ from typing import Any
 from .core.contracts import SCHEMA_VERSION, ContractError
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.storage import initialize_workspace
-from .ingest import collect_cn_snapshot
+from .ingest import collect_cn_snapshot, probe_hithink_provider
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collect_parser = subparsers.add_parser(
         "collect-snapshot",
-        help="Collect real BaoStock market data and build a normalized snapshot from a seed",
+        help="Collect real market data and build a normalized snapshot from a seed",
     )
     collect_parser.add_argument(
         "--seed-json",
@@ -56,6 +56,28 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Immutable identifier for the normalized snapshot",
     )
+    collect_parser.add_argument(
+        "--provider",
+        choices=("baostock", "hithink"),
+        default="baostock",
+        help="Market-data provider. Defaults to baostock; failures never fall back.",
+    )
+    collect_parser.add_argument(
+        "--raw-store-root",
+        type=Path,
+        help=(
+            "HiThink immutable raw-response store. Defaults to STOCK_RESEARCH_RAW_STORE or "
+            "the platform user-data directory."
+        ),
+    )
+
+    probe_parser = subparsers.add_parser(
+        "provider-probe",
+        help="Explicitly access one provider endpoint and print only safe receipt metadata",
+    )
+    probe_parser.add_argument("--provider", choices=("hithink",), required=True)
+    probe_parser.add_argument("--symbol", default="600000.SH")
+    probe_parser.add_argument("--raw-store-root", type=Path)
 
     demo_parser = subparsers.add_parser(
         "demo", help="Run the explicit synthetic installation fixture"
@@ -87,8 +109,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _read_json(args.seed_json),
                 workspace=workspace,
                 snapshot_id=args.snapshot_id,
+                provider_kind=args.provider,
+                raw_store_root=args.raw_store_root,
             )
             result = collected.to_dict()
+        elif args.command == "provider-probe":
+            result = probe_hithink_provider(
+                args.symbol,
+                workspace=workspace,
+                raw_store_root=args.raw_store_root,
+            )
         else:
             result = run_research(
                 {

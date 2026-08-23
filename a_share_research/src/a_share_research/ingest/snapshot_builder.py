@@ -6,9 +6,10 @@ import os
 import re
 import secrets
 import stat
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,12 +18,21 @@ from ..core.contracts import (
     MARKET,
     SCHEMA_VERSION,
     ContractError,
+    parse_datetime,
     require_list,
     require_mapping,
     require_string,
 )
 from ..core.snapshot import validate_snapshot
 from ..core.utils import sha256_value
+from .baostock import BaoStockProvider
+from .hithink_client import (
+    HITHINK_PROVIDER_NAME,
+    HITHINK_PROVIDER_VERSION,
+    HiThinkClient,
+)
+from .hithink_enrichment import EnrichmentResult, collect_hithink_enrichment
+from .hithink_provider import HiThinkProvider
 from .market_data import (
     SHANGHAI_TZ,
     CollectionError,
@@ -30,6 +40,7 @@ from .market_data import (
     collect_cn_market_data,
     normalize_baostock_symbol,
 )
+from .raw_store import ImmutableRawStore
 
 _GENERATED_SEED_FIELDS = {
     "as_of",
@@ -83,13 +94,16 @@ def collect_cn_snapshot(
     snapshot_id: str,
     retrieved_at: datetime | None = None,
     provider: DailyMarketDataProvider | None = None,
+    provider_kind: str = "baostock",
+    raw_store_root: Path | str | None = None,
 ) -> SnapshotCollectionResult:
-    """Collect BaoStock observations and atomically persist one normalized CN snapshot.
+    """Collect provider observations and atomically persist one normalized CN snapshot.
 
     ``seed`` deliberately contains only editorial research data: official/industry evidence,
     themes, and candidates.  Market evidence and generated snapshot metadata are rejected so a
     stale response cannot be relabelled as a fresh collection.  ``provider`` is injectable for
-    deterministic tests; production lazily constructs the optional BaoStock adapter.
+    deterministic tests.  Production uses the explicitly selected provider and never falls back
+    to another source after a provider failure.
     """
 
     _reject_synthetic_publication_seed(seed)
@@ -97,17 +111,52 @@ def collect_cn_snapshot(
     resolved_workspace = Path(workspace).expanduser().resolve()
     target = _preflight_output_target(resolved_workspace, snapshot_id)
     _reject_public_retrieved_at_override(retrieved_at, provider)
+    selected_provider = _normalize_provider_kind(provider_kind)
+    if selected_provider == "baostock" and (
+        raw_store_root is not None or "STOCK_RESEARCH_RAW_STORE" in os.environ
+    ):
+        raise CollectionError("HiThink raw store configuration requires provider_kind=hithink")
 
-    if provider is None:
-        from .baostock import BaoStockProvider
+    enrichment: EnrichmentResult | None = None
+    hithink_client: HiThinkClient | None = None
+    if provider is not None:
+        if selected_provider != "baostock":
+            raise CollectionError(
+                "an injected provider can only be used with provider_kind=baostock"
+            )
+        active_provider = provider
+    elif selected_provider == "baostock":
+        active_provider = BaoStockProvider()
+    else:
+        raw_root = _resolve_hithink_raw_store_root(
+            raw_store_root,
+            workspace=resolved_workspace,
+        )
+        raw_store = ImmutableRawStore(raw_root)
+        hithink_client = HiThinkClient(raw_store=raw_store)
+        active_provider = HiThinkProvider(hithink_client)
 
-        provider = BaoStockProvider()
     collection = collect_cn_market_data(
         candidate_symbols,
-        provider=provider,
+        provider=active_provider,
         retrieved_at=retrieved_at,
     )
-    snapshot = _assemble_snapshot(normalized_seed, snapshot_id, collection)
+    if hithink_client is not None:
+        enrichment = collect_hithink_enrichment(
+            hithink_client,
+            latest_session=collection.latest_session,
+            candidate_thscodes=tuple(
+                _hithink_symbol_for_cn_symbol(symbol) for symbol in candidate_symbols
+            ),
+        )
+        if enrichment.latest_session != collection.latest_session:
+            raise CollectionError("HiThink enrichment latest_session differs from daily data")
+    snapshot = _assemble_snapshot(
+        normalized_seed,
+        snapshot_id,
+        collection,
+        enrichment=enrichment,
+    )
     validated = validate_snapshot(snapshot)
     created = _persist_without_overwrite(target, resolved_workspace, validated.data)
     relative_path = target.relative_to(resolved_workspace).as_posix()
@@ -121,6 +170,43 @@ def collect_cn_snapshot(
         provider_name=collection.provider_name,
         created=created,
     )
+
+
+def probe_hithink_provider(
+    symbol: str,
+    *,
+    workspace: Path,
+    raw_store_root: Path | str | None = None,
+) -> dict[str, Any]:
+    """Run one explicit network probe and return only credential-free receipt metadata."""
+
+    # Resolve the workspace up front so an invalid caller path cannot be confused with provider
+    # configuration.  Raw responses still live in the independent user-data store.
+    resolved_workspace = Path(workspace).expanduser().resolve()
+    thscode = _hithink_symbol_for_cn_symbol(normalize_baostock_symbol(symbol))
+    raw_root = _resolve_hithink_raw_store_root(
+        raw_store_root,
+        workspace=resolved_workspace,
+    )
+    client = HiThinkClient(raw_store=ImmutableRawStore(raw_root))
+    response = client.get(
+        "/api/a-share/prices/snapshot",
+        {"thscodes": thscode},
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "market": MARKET,
+        "provider": {
+            "name": HITHINK_PROVIDER_NAME,
+            "version": HITHINK_PROVIDER_VERSION,
+        },
+        "status": "ok",
+        "endpoint": response.endpoint,
+        "request_id": response.request_id,
+        "retrieved_at": response.retrieved_at.isoformat(),
+        "body_sha256": response.body_sha256,
+        "raw_artifact_id": response.raw_artifact_id,
+    }
 
 
 def validate_research_seed(seed: Mapping[str, Any]) -> dict[str, Any]:
@@ -186,7 +272,39 @@ def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tu
             candidate_symbols.append(normalized_symbol)
     if not candidate_symbols:
         raise CollectionError("research seed must contain at least one candidate")
+    _validate_complete_editorial_seed(data)
     return data, tuple(candidate_symbols)
+
+
+def _validate_complete_editorial_seed(seed: Mapping[str, Any]) -> None:
+    """Exercise the complete snapshot contract before any provider object is constructed."""
+
+    evidence = require_list(seed.get("evidence"), "seed.evidence")
+    retrieved_candidates = [
+        parse_datetime(
+            require_mapping(item, f"seed.evidence[{index}]").get("retrieved_at"),
+            f"seed.evidence[{index}].retrieved_at",
+        )
+        for index, item in enumerate(evidence)
+    ]
+    boundary = max(retrieved_candidates, default=datetime.now(UTC)).isoformat()
+    validate_snapshot(
+        {
+            **copy.deepcopy(dict(seed)),
+            "snapshot_id": "seed-preflight",
+            "data_mode": "snapshot",
+            "pit_quality": "RECONSTRUCTED_NON_PIT",
+            "as_of": boundary,
+            "retrieved_at": boundary,
+            "market_context": {
+                "regime": "UNKNOWN（seed preflight）",
+                "breadth": "UNKNOWN（seed preflight）",
+                "liquidity": "UNKNOWN（seed preflight）",
+                "calculation_note": "Seed-only contract validation before network access.",
+                "evidence_refs": [],
+            },
+        }
+    )
 
 
 def _reject_synthetic_publication_seed(seed: Mapping[str, Any]) -> None:
@@ -222,8 +340,16 @@ def _contains_synthetic_text(value: Any) -> bool:
     return False
 
 
-def _assemble_snapshot(seed: dict[str, Any], snapshot_id: str, collection: Any) -> dict[str, Any]:
+def _assemble_snapshot(
+    seed: dict[str, Any],
+    snapshot_id: str,
+    collection: Any,
+    *,
+    enrichment: EnrichmentResult | None = None,
+) -> dict[str, Any]:
     market_fragments = collection.evidence_fragments()
+    enrichment_fragments = enrichment.evidence_fragments() if enrichment is not None else []
+    enrichment_refs = enrichment.candidate_evidence_refs() if enrichment is not None else {}
     candidate_market_refs = {
         fragment["instrument"]["code"]: fragment["evidence_id"]
         for fragment in market_fragments
@@ -243,23 +369,125 @@ def _assemble_snapshot(seed: dict[str, Any], snapshot_id: str, collection: Any) 
                     f"collector returned no candidate market evidence for {code}"
                 ) from exc
             candidate["market_evidence_refs"] = [market_ref]
+            if enrichment is not None:
+                thscode = _hithink_symbol_for_cn_symbol(code)
+                candidate["evidence_refs"] = _unique_strings(
+                    [*candidate["evidence_refs"], *enrichment_refs.get(thscode, ())]
+                )
             candidates.append(candidate)
         theme["candidates"] = candidates
         themes.append(theme)
 
     as_of = datetime.combine(collection.latest_session, time(15, 0), tzinfo=SHANGHAI_TZ)
-    return {
+    retrieved = collection.retrieved_at
+    market_context = collection.market_context_fragment()
+    if enrichment is not None:
+        retrieved = max(retrieved, enrichment.retrieved_at)
+        enriched_context = copy.deepcopy(enrichment.market_context_fragment())
+        enriched_context["calculation_note"] = (
+            f"{enriched_context['calculation_note']} "
+            f"指数日线补充说明：{market_context['calculation_note']}"
+        )
+        enriched_context["evidence_refs"] = _unique_strings(
+            [*market_context["evidence_refs"], *enriched_context["evidence_refs"]]
+        )
+        market_context = enriched_context
+
+    snapshot = {
         "schema_version": SCHEMA_VERSION,
         "market": MARKET,
         "snapshot_id": snapshot_id,
         "data_mode": "snapshot",
         "pit_quality": "RECONSTRUCTED_NON_PIT",
         "as_of": as_of.isoformat(),
-        "retrieved_at": collection.retrieved_at.isoformat(),
-        "market_context": collection.market_context_fragment(),
-        "evidence": [*copy.deepcopy(seed["evidence"]), *market_fragments],
+        "retrieved_at": retrieved.isoformat(),
+        "market_context": market_context,
+        "evidence": [
+            *copy.deepcopy(seed["evidence"]),
+            *market_fragments,
+            *enrichment_fragments,
+        ],
         "themes": themes,
     }
+    if enrichment is not None:
+        snapshot["provider_data_gaps"] = {
+            code: list(gaps) for code, gaps in enrichment.data_gaps.items()
+        }
+    return snapshot
+
+
+def _normalize_provider_kind(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("provider_kind must be a string")
+    normalized = value.strip().lower()
+    if normalized not in {"baostock", "hithink"}:
+        raise CollectionError("provider_kind must be baostock or hithink")
+    return normalized
+
+
+def _resolve_hithink_raw_store_root(
+    value: Path | str | None,
+    *,
+    workspace: Path,
+) -> Path:
+    configured: Path | str | None = value
+    if configured is None:
+        environment_value = os.environ.get("STOCK_RESEARCH_RAW_STORE")
+        if environment_value is not None:
+            if not environment_value.strip():
+                raise CollectionError("STOCK_RESEARCH_RAW_STORE must not be empty")
+            configured = environment_value
+    if configured is None:
+        configured_path = _default_hithink_raw_store_root()
+    else:
+        configured_path = Path(configured).expanduser()
+        if not configured_path.is_absolute():
+            raise CollectionError("HiThink raw store root must be an absolute path")
+
+    resolved = configured_path.resolve()
+    repository_root = Path(__file__).resolve().parents[4]
+    if _is_within(resolved, workspace.resolve()):
+        raise CollectionError("HiThink raw store root must be outside the runtime workspace")
+    if _is_within(resolved, repository_root):
+        raise CollectionError("HiThink raw store root must be outside the source repository")
+    return resolved
+
+
+def _default_hithink_raw_store_root() -> Path:
+    home = Path.home().resolve()
+    suffix = Path("stock-research-harness") / "raw" / "cn" / "hithink"
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / suffix
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data).expanduser() if local_app_data else home / "AppData" / "Local"
+        return base / suffix
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        base = Path(xdg_data_home).expanduser()
+        if not base.is_absolute():
+            raise CollectionError("XDG_DATA_HOME must be an absolute path")
+    else:
+        base = home / ".local" / "share"
+    return base / suffix
+
+
+def _hithink_symbol_for_cn_symbol(symbol: str) -> str:
+    normalized = normalize_baostock_symbol(symbol)
+    exchange, ticker = normalized.split(".", 1)
+    return f"{ticker}.{exchange.upper()}"
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def _preflight_output_target(workspace: Path, snapshot_id: str) -> Path:
