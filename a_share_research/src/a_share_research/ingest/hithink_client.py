@@ -211,8 +211,8 @@ class HiThinkClient:
         """Issue a bounded GET and optionally publish the successful raw response.
 
         Business ``code`` is checked even when HTTP status is 200.  Network failures, HTTP
-        5xx, rate-limit code 4001 and provider 5xxx codes are retried; every other violation
-        fails closed immediately.
+        5xx, HTTP 429 (rate limit), rate-limit code 4001 and provider 5xxx codes are retried
+        with backoff; every other violation fails closed immediately.
         """
 
         safe_endpoint = _validate_endpoint(endpoint)
@@ -243,7 +243,8 @@ class HiThinkClient:
 
             _validate_http_response_shape(http_response)
             if http_response.status != 200:
-                if 500 <= http_response.status <= 599 and attempt < self._max_attempts:
+                retryable_status = http_response.status == 429 or 500 <= http_response.status <= 599
+                if retryable_status and attempt < self._max_attempts:
                     self._sleep_before_retry(attempt)
                     continue
                 raise HiThinkProtocolError(

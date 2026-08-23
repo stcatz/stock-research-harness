@@ -27,6 +27,25 @@ _INDEX_SNAPSHOT_ENDPOINT = "/api/a-share-index/prices/snapshot"
 _CANONICAL_SYMBOL_PATTERN = re.compile(r"(sh|sz|bj)\.(\d{6})\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _PCT_TOLERANCE = Decimal("0.0001")
+# The index history endpoint quantizes prices to three decimals while the snapshot may
+# carry a fourth, and the snapshot may round turnover (to whole yuan at small scales and
+# to coarser units at large scales). Tolerate only this sub-unit / sub-ppm quantization
+# noise without relaxing genuine session mismatches, which differ by far more.
+_PRICE_TOLERANCE = Decimal("0.001")
+_AMOUNT_ABS_TOLERANCE = Decimal("1")
+_AMOUNT_REL_TOLERANCE = Decimal("0.000001")
+_FIELD_TOLERANCES = {
+    "open": _PRICE_TOLERANCE,
+    "high": _PRICE_TOLERANCE,
+    "low": _PRICE_TOLERANCE,
+    "close": _PRICE_TOLERANCE,
+}
+
+
+def _amount_mismatch(expected: Decimal, snapshot: Decimal) -> bool:
+    reference = max(abs(expected), abs(snapshot))
+    bound = max(_AMOUNT_ABS_TOLERANCE, reference * _AMOUNT_REL_TOLERANCE)
+    return abs(expected - snapshot) > bound
 
 
 class HiThinkGetClient(Protocol):
@@ -251,7 +270,18 @@ def _cross_check_latest_snapshot(
         "volume": _decimal(item.get("volume"), f"{thscode} snapshot.volume"),
         "amount": _decimal(item.get("turnover"), f"{thscode} snapshot.turnover"),
     }
-    mismatched = sorted(field for field in expected if expected[field] != snapshot[field])
+    # Price and amount fields tolerate sub-unit quantization between the history and
+    # snapshot endpoints (index prices at three vs four decimals; turnover rounded to
+    # whole yuan or coarser at scale). Volume must still match exactly because it
+    # identifies the session.
+    def _field_mismatch(field: str) -> bool:
+        if field in _FIELD_TOLERANCES:
+            return abs(expected[field] - snapshot[field]) > _FIELD_TOLERANCES[field]
+        if field == "amount":
+            return _amount_mismatch(expected[field], snapshot[field])
+        return expected[field] != snapshot[field]
+
+    mismatched = sorted(field for field in expected if _field_mismatch(field))
     previous_close = _decimal(item.get("prev_price"), f"{thscode} snapshot.prev_price")
     pct_chg = _decimal(
         item.get("price_change_ratio_pct"),

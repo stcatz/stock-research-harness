@@ -384,6 +384,41 @@ class HiThinkEnrichmentTests(unittest.TestCase):
         self.assertTrue(all(params["date_ms"] == SESSION_DATE_MS for params in pool_calls))
         self.assertTrue(all("date" not in params for params in pool_calls))
 
+    def test_null_volume_row_is_counted_as_no_trade_not_a_failure(self) -> None:
+        # Suspended / not-ready rows arrive with null volume, turnover and price fields;
+        # they must be counted as no-trade rather than aborting the whole breadth snapshot.
+        responses = _valid_responses()
+        null_row = {
+            "thscode": "301688.SZ",
+            "ticker": "301688",
+            "last_price": None,
+            "price_change": None,
+            "price_change_ratio_pct": None,
+            "open_price": None,
+            "high_price": None,
+            "low_price": None,
+            "prev_price": None,
+            "volume": None,
+            "turnover": None,
+        }
+        responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][0].data["total"] = 4
+        responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][1].data["total"] = 4
+        responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][1].data["item"].append(null_row)
+        client = _QueueClient(responses)
+
+        result = collect_hithink_enrichment(
+            client,
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        self.assertEqual(result.breadth.total, 4)
+        self.assertEqual(result.breadth.no_trade, 2)
+        self.assertEqual(result.breadth.advancing, 1)
+        self.assertEqual(result.breadth.declining, 1)
+        self.assertEqual(str(result.breadth.turnover_total), "300")
+
     def test_market_snapshot_fails_closed_on_incomplete_duplicate_or_inconsistent_pages(
         self,
     ) -> None:
@@ -397,7 +432,9 @@ class HiThinkEnrichmentTests(unittest.TestCase):
                 elif mutation == "duplicate":
                     second.data["item"] = [_price("600519.SH", ratio=0, volume=1, turnover=1)]
                 else:
-                    second.data["timestamp"] += 1
+                    # Per-response assembly timestamps advance across pages; only a regression
+                    # (later page older than the first) violates monotonic non-decreasing.
+                    second.data["timestamp"] -= 1
                 client = _QueueClient(responses)
 
                 with self.assertRaises(HiThinkEnrichmentError):

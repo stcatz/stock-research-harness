@@ -523,8 +523,12 @@ def _collect_full_market_breadth(
             expected_timestamp = timestamp
         elif total != expected_total:
             raise HiThinkEnrichmentError("prices snapshot total changed across pages")
-        if timestamp != expected_timestamp:
-            raise HiThinkEnrichmentError("prices snapshot timestamp changed across pages")
+        # The provider documents ``data.timestamp`` as per-response assembly time, so pages
+        # fetched sequentially advance by a few seconds. Requiring monotonic non-decreasing
+        # still fails closed if a later page reports an older time (cross-session mixing);
+        # total/duplicate/coverage checks below guard the rest.
+        if timestamp < expected_timestamp:
+            raise HiThinkEnrichmentError("prices snapshot timestamp went backwards across pages")
 
         items = _items(data, "prices snapshot")
         if len(items) > page_size:
@@ -536,16 +540,21 @@ def _collect_full_market_breadth(
                 raise HiThinkEnrichmentError(f"prices snapshot contains duplicate thscode: {code}")
             seen.add(code)
             _validate_ticker(item.get("ticker"), code, f"prices snapshot.item[{index}].ticker")
-            volume = _required_decimal(item.get("volume"), f"prices snapshot {code}.volume")
-            turnover = _required_decimal(item.get("turnover"), f"prices snapshot {code}.turnover")
-            if volume < 0 or turnover < 0:
-                raise HiThinkEnrichmentError(
-                    f"prices snapshot {code} volume and turnover must be nonnegative"
-                )
-            turnover_total += turnover
-            if volume <= 0:
+            volume = _optional_decimal(item.get("volume"), f"prices snapshot {code}.volume")
+            turnover = _optional_decimal(item.get("turnover"), f"prices snapshot {code}.turnover")
+            # Suspended or not-ready rows arrive with null volume/turnover; they are counted
+            # as no-trade rather than failing the whole breadth snapshot. No fabricated
+            # turnover is added and no price change is inferred from a null row.
+            if volume is not None and volume < 0:
+                raise HiThinkEnrichmentError(f"prices snapshot {code} volume must be nonnegative")
+            if turnover is not None and turnover < 0:
+                raise HiThinkEnrichmentError(f"prices snapshot {code} turnover must be nonnegative")
+            if volume is None or volume <= 0:
                 no_trade += 1
                 continue
+            if turnover is None:
+                raise HiThinkEnrichmentError(f"prices snapshot {code} traded without turnover")
+            turnover_total += turnover
             ratio = _required_decimal(
                 item.get("price_change_ratio_pct"),
                 f"prices snapshot {code}.price_change_ratio_pct",

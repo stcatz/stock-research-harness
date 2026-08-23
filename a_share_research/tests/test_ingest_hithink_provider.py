@@ -169,6 +169,49 @@ class HiThinkProviderTests(unittest.TestCase):
                 is_benchmark=False,
             )
 
+    def test_snapshot_price_precision_truncation_is_tolerated(self) -> None:
+        # The index history endpoint quantizes to three decimals while the snapshot may
+        # carry a fourth, and the snapshot may truncate turnover to whole yuan. These
+        # sub-unit differences must not fail the cross-check.
+        self.client.snapshot_overrides["600000.SH"] = {
+            "last_price": 111.0005,
+            "high_price": 112.0009,
+            "low_price": 109.0007,
+            "turnover": "100011.49",
+            "prev_price": 110,
+            "price_change_ratio_pct": str((Decimal("111.0005") / Decimal(110) - 1) * 100),
+        }
+
+        series = self.provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+
+        self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "MATCHED")
+        # History remains authoritative for OHLC; the snapshot only validates it and
+        # supplies preclose/pct_chg, so the four-decimal snapshot close is not adopted.
+        self.assertEqual(series.bars[-1].close, Decimal("111"))
+        self.assertEqual(series.bars[-1].preclose, Decimal(110))
+
+    def test_snapshot_amount_mismatch_beyond_tolerance_fails_closed(self) -> None:
+        # A turnover difference of more than one yuan indicates a different session and
+        # must still fail even though sub-unit truncation is tolerated.
+        self.client.snapshot_overrides["600000.SH"] = {
+            "turnover": "100013",
+            "prev_price": 110,
+            "price_change_ratio_pct": str((Decimal(111) / Decimal(110) - 1) * 100),
+        }
+
+        with self.assertRaisesRegex(CollectionError, "snapshot mismatch.*amount"):
+            self.provider.fetch_daily_series(
+                "sh.600000",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 17),
+                is_benchmark=False,
+            )
+
     def test_snapshot_unavailable_fails_closed(self) -> None:
         self.client.snapshot_items_overrides["600000.SH"] = []
 

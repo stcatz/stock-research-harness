@@ -170,6 +170,48 @@ class HiThinkClientTests(unittest.TestCase):
         self.assertNotIn(self.api_key, str(raised.exception))
         self.assertEqual(len(transport.requests), 1)
 
+    def test_http_429_rate_limit_retries_with_backoff_then_succeeds(self) -> None:
+        transport = _QueueTransport(
+            _response(_body(code=0, data={}), status=429),
+            _response(_body(data={"rows": ["ok"]})),
+        )
+        sleeps: list[float] = []
+        client = HiThinkClient(
+            api_key=self.api_key,
+            transport=transport,
+            clock=lambda: self.now,
+            sleeper=sleeps.append,
+            max_attempts=3,
+            retry_backoff_seconds=0.5,
+        )
+
+        result = client.get("/api/meta/tickers", {"query": "银行"})
+
+        self.assertEqual(result.data, {"rows": ["ok"]})
+        self.assertEqual(len(transport.requests), 2)
+        self.assertEqual(sleeps, [0.5])
+
+    def test_http_429_exhaustion_fails_closed_without_leaking_secret(self) -> None:
+        transport = _QueueTransport(
+            _response(_body(code=0, data={}), status=429),
+            _response(_body(code=0, data={}), status=429),
+            _response(_body(code=0, data={}), status=429),
+        )
+        client = HiThinkClient(
+            api_key=self.api_key,
+            transport=transport,
+            clock=lambda: self.now,
+            sleeper=lambda _: None,
+            max_attempts=3,
+            retry_backoff_seconds=0.5,
+        )
+
+        with self.assertRaisesRegex(HiThinkProtocolError, "429"):
+            client.get("/api/meta/tickers", {"query": "银行"})
+
+        self.assertEqual(len(transport.requests), 3)
+        self.assertNotIn(self.api_key, str(transport.requests[-1].url))
+
     def test_transport_failure_exhaustion_does_not_chain_or_render_secret(self) -> None:
         transport = _QueueTransport(
             TimeoutError(self.api_key), TimeoutError(self.api_key), TimeoutError(self.api_key)
