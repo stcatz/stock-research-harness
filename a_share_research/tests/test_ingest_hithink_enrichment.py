@@ -573,9 +573,7 @@ class HiThinkEnrichmentTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 responses = _valid_responses()
                 response = responses[endpoint][0]
-                response.data["timestamp"] = int(
-                    (response.retrieved_at.timestamp() + 1) * 1000
-                )
+                response.data["timestamp"] = int((response.retrieved_at.timestamp() + 1) * 1000)
 
                 with self.assertRaisesRegex(HiThinkEnrichmentError, "later than retrieval"):
                     collect_hithink_enrichment(

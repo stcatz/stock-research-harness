@@ -1246,9 +1246,7 @@ def _replace_gateway_source(
     if timestamp is not None:
         upstream_at = _datetime_from_ms(timestamp, "provider response.timestamp")
         if upstream_at > source.retrieved_at.astimezone(UTC):
-            raise HiThinkEnrichmentError(
-                "provider response.timestamp is later than retrieval time"
-            )
+            raise HiThinkEnrichmentError("provider response.timestamp is later than retrieval time")
     enriched = replace(source, upstream_timestamp_ms=timestamp)
     gateway.sources[-1] = enriched
     return enriched
