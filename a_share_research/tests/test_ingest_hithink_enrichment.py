@@ -484,6 +484,29 @@ class HiThinkEnrichmentTests(unittest.TestCase):
                 page_size=2,
             )
 
+    def test_session_scoped_enrichment_rejects_missing_or_wrong_session_timestamps(self) -> None:
+        mutations = ("pool_wrong_session", "valuation_missing", "valuation_wrong_session")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                responses = _valid_responses()
+                if mutation == "pool_wrong_session":
+                    for response in responses[HITHINK_POOL_ENDPOINTS["limit_up"]]:
+                        response.data["timestamp"] += 24 * 60 * 60 * 1000
+                elif mutation == "valuation_missing":
+                    responses[HITHINK_VALUATIONS_ENDPOINT][0].data.pop("timestamp")
+                else:
+                    responses[HITHINK_VALUATIONS_ENDPOINT][0].data["timestamp"] += (
+                        24 * 60 * 60 * 1000
+                    )
+
+                with self.assertRaisesRegex(HiThinkEnrichmentError, "timestamp|latest_session"):
+                    collect_hithink_enrichment(
+                        _QueueClient(responses),
+                        latest_session=SESSION,
+                        candidate_thscodes=["600519.SH"],
+                        page_size=2,
+                    )
+
     def test_response_metadata_extractor_supports_mapping_fakes(self) -> None:
         responses = _valid_responses()
         first = responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][0]

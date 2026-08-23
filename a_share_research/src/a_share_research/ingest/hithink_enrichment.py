@@ -689,6 +689,8 @@ def _collect_one_pool(
         assert timestamp is not None
         source = _replace_gateway_source(gateway, source, timestamp)
         sources.append(source)
+        if _shanghai_date_from_ms(timestamp, f"{pool} pool.timestamp") != latest_session:
+            raise HiThinkEnrichmentError(f"{pool} pool timestamp does not match latest_session")
         pagination = _mapping(data.get("pagination"), f"{pool}.pagination")
         total = _nonnegative_int(pagination.get("total"), f"{pool}.pagination.total")
         pages = _nonnegative_int(pagination.get("pages"), f"{pool}.pagination.pages")
@@ -743,8 +745,13 @@ def _collect_valuations(
             HITHINK_VALUATIONS_ENDPOINT,
             {"thscodes": ",".join(batch)},
         )
-        timestamp = _upstream_timestamp(data, "valuations snapshot", allow_none=True)
+        timestamp = _upstream_timestamp(data, "valuations snapshot", allow_none=False)
+        assert timestamp is not None
         source = _replace_gateway_source(gateway, source, timestamp)
+        if _shanghai_date_from_ms(timestamp, "valuations snapshot.timestamp") != latest_session:
+            raise HiThinkEnrichmentError(
+                "valuations snapshot timestamp does not match latest_session"
+            )
         total = _nonnegative_int(data.get("total"), "valuations snapshot.total")
         items = _items(data, "valuations snapshot")
         if total != len(items):
