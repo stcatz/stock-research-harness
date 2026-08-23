@@ -122,6 +122,28 @@ class BaoStockProviderTests(unittest.TestCase):
         self.assertEqual(rows[0]["close"], "10.5")
         self.assertEqual(rows[0]["tradestatus"], "1")
 
+    def test_fetch_daily_series_normalizes_baostock_shape(self) -> None:
+        provider = BaoStockProvider(_Client(), version="test-1")
+
+        provider.login()
+        series = provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 14),
+            is_benchmark=False,
+        )
+        provider.logout()
+
+        self.assertEqual(series.code, "sh.600000")
+        self.assertEqual(len(series.bars), 1)
+        self.assertEqual(str(series.bars[0].close), "10.5")
+        self.assertEqual(str(series.bars[0].turn), "1.2")
+        self.assertEqual(series.bars[0].trade_status, "1")
+        self.assertEqual(series.bars[0].field_provenance["turn"], "reported")
+        self.assertEqual(series.session_statuses[date(2026, 8, 14)], "1")
+        self.assertEqual(series.metadata["query"]["frequency"], "d")
+        self.assertEqual(series.metadata["query"]["adjustment"], "none")
+
     def test_login_error_fails_closed(self) -> None:
         provider = BaoStockProvider(
             _Client(login_status=_Status("1001", "login rejected")), version="test-1"

@@ -4,6 +4,7 @@ import copy
 import unittest
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,8 @@ from a_share_research.ingest import (
     BENCHMARK_SYMBOLS,
     DAILY_FIELDS,
     CollectionError,
+    DailyBar,
+    DailySeries,
     collect_cn_market_data,
     normalize_baostock_symbol,
 )
@@ -54,6 +57,40 @@ class FakeProvider:
         if code not in self.rows_by_code:
             raise RuntimeError("fixture has no rows")
         return copy.deepcopy(self.rows_by_code[code])
+
+
+class CanonicalProvider:
+    name = "canonical-provider"
+    version = "2026.08"
+    source_url = "https://data.example.test/"
+
+    def __init__(self, series_by_code: Mapping[str, DailySeries]) -> None:
+        self.series_by_code = series_by_code
+        self.queries: list[dict[str, Any]] = []
+
+    def login(self) -> None:
+        return None
+
+    def logout(self) -> None:
+        return None
+
+    def fetch_daily_series(
+        self,
+        code: str,
+        *,
+        start_date: date,
+        end_date: date,
+        is_benchmark: bool,
+    ) -> DailySeries:
+        self.queries.append(
+            {
+                "code": code,
+                "start_date": start_date,
+                "end_date": end_date,
+                "is_benchmark": is_benchmark,
+            }
+        )
+        return self.series_by_code[code]
 
 
 class MarketDataCollectionTests(unittest.TestCase):
@@ -109,6 +146,42 @@ class MarketDataCollectionTests(unittest.TestCase):
         self.assertIn("UNKNOWN", context["breadth"])
         self.assertIn("not full-market breadth", context["calculation_note"])
         self.assertEqual(len(context["evidence_refs"]), 3)
+
+    def test_canonical_provider_may_report_unknown_optional_fields(self) -> None:
+        series_by_code = {
+            code: _canonical_series(code, self.session_dates)
+            for code in (*BENCHMARK_SYMBOLS, self.candidate)
+        }
+        provider = CanonicalProvider(series_by_code)
+
+        result = collect_cn_market_data(
+            [self.candidate], provider=provider, retrieved_at=self.retrieved_at
+        )
+
+        self.assertEqual(len(provider.queries), 4)
+        candidate = next(item for item in result.instruments if item.code == self.candidate)
+        self.assertIsNone(candidate.latest.turn)
+        self.assertEqual(candidate.latest.trade_status, "UNKNOWN")
+        self.assertIsNone(candidate.latest.is_st)
+        self.assertEqual(
+            candidate.latest.field_provenance["pct_chg"],
+            "derived_from_adjacent_unadjusted_close",
+        )
+
+        fragment = next(
+            item
+            for item in result.evidence_fragments()
+            if item["instrument"]["code"] == self.candidate
+        )
+        self.assertEqual(fragment["evidence_id"], "MKT-CANONICAL-PROVIDER-SH-600000-20260814")
+        self.assertEqual(fragment["effective_at"], fragment["as_of"])
+        self.assertEqual(fragment["latest"]["turn"], None)
+        self.assertEqual(fragment["latest"]["trade_status"], "UNKNOWN")
+        self.assertEqual(fragment["unknown_fields"], ["is_st", "trade_status", "turn"])
+        self.assertNotIn("raw_body", fragment["provider"])
+        self.assertEqual(
+            fragment["provider"]["series_metadata"]["raw_artifact"]["sha256"], "a" * 64
+        )
 
     def test_benchmark_turnover_may_be_blank_but_candidate_turnover_may_not(self) -> None:
         provider = FakeProvider(self.rows_by_code)
@@ -225,6 +298,51 @@ def _daily_rows(
             }
         )
     return rows
+
+
+def _canonical_series(code: str, session_dates: Sequence[date]) -> DailySeries:
+    bars: list[DailyBar] = []
+    for index, session_date in enumerate(session_dates):
+        close = 99 + index
+        previous = close - 1 if index else None
+        bars.append(
+            DailyBar(
+                trade_date=session_date,
+                code=code,
+                open=Decimal(close - 1),
+                high=Decimal(close + 1),
+                low=Decimal(close - 2),
+                close=Decimal(close),
+                preclose=Decimal(previous) if previous is not None else None,
+                volume=Decimal(1000 + index),
+                amount=Decimal(max(index, 1) * 100),
+                turn=None,
+                pct_chg=(((Decimal(close) / previous) - 1) * 100 if previous is not None else None),
+                trade_status="UNKNOWN",
+                is_st=None,
+                field_provenance={
+                    "preclose": (
+                        "derived_from_adjacent_unadjusted_close"
+                        if previous is not None
+                        else "UNKNOWN"
+                    ),
+                    "pct_chg": (
+                        "derived_from_adjacent_unadjusted_close"
+                        if previous is not None
+                        else "UNKNOWN"
+                    ),
+                    "turn": "UNKNOWN",
+                    "trade_status": "UNKNOWN",
+                    "is_st": "UNKNOWN",
+                },
+            )
+        )
+    return DailySeries(
+        code=code,
+        bars=tuple(bars),
+        session_statuses={item: "UNKNOWN" for item in session_dates},
+        metadata={"raw_artifact": {"sha256": "a" * 64}},
+    )
 
 
 if __name__ == "__main__":

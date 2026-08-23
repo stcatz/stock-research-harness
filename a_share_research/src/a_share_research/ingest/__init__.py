@@ -5,17 +5,20 @@ normalize the returned fragments, and then build a versioned research snapshot.
 """
 
 from .baostock import BaoStockProvider
+from .hithink_provider import HiThinkMarketDataProvider, HiThinkProvider
 from .market_data import (
     BENCHMARK_SYMBOLS,
     DAILY_FIELDS,
     CollectionError,
     DailyBar,
     DailyMarketDataProvider,
+    DailySeries,
     InstrumentMarketData,
     MarketDataCollection,
     ProviderUnavailableError,
     collect_cn_market_data,
     normalize_baostock_symbol,
+    normalize_cn_symbol,
 )
 from .snapshot_builder import (
     SnapshotCollectionResult,
@@ -30,6 +33,9 @@ __all__ = [
     "CollectionError",
     "DailyBar",
     "DailyMarketDataProvider",
+    "DailySeries",
+    "HiThinkMarketDataProvider",
+    "HiThinkProvider",
     "InstrumentMarketData",
     "MarketDataCollection",
     "ProviderUnavailableError",
@@ -37,5 +43,6 @@ __all__ = [
     "collect_cn_market_data",
     "collect_cn_snapshot",
     "normalize_baostock_symbol",
+    "normalize_cn_symbol",
     "validate_research_seed",
 ]
