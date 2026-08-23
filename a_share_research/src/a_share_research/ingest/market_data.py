@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Protocol
@@ -142,6 +142,10 @@ class DailySeries:
     session_statuses: Mapping[date, str]
     metadata: Mapping[str, Any] = field(default_factory=dict)
     adjustment: str = "none"
+    # Providers with auditable response receipts must set this to the latest retrieval time of
+    # every response used to construct this series. Providers without such a contract leave it
+    # ``None`` and the collector records its own completion time instead.
+    retrieved_at: datetime | None = None
 
     @property
     def latest_observed_date(self) -> date:
@@ -242,15 +246,20 @@ def collect_cn_market_data(
     retrieved_at: datetime | None = None,
     lookback_calendar_days: int = DEFAULT_LOOKBACK_CALENDAR_DAYS,
 ) -> MarketDataCollection:
-    """Collect canonical candidate and benchmark observations without claiming PIT quality."""
+    """Collect canonical candidate and benchmark observations without claiming PIT quality.
 
-    captured_at = _normalize_retrieved_at(retrieved_at)
+    ``retrieved_at`` is a deterministic query/fallback clock for tests and providers that do not
+    expose response receipts (currently BaoStock). It never replaces timestamps supplied by an
+    auditable provider response.
+    """
+
+    query_clock = _normalize_retrieved_at(retrieved_at)
     if lookback_calendar_days < 20:
         raise ValueError("lookback_calendar_days must be at least 20")
 
     candidates = tuple(sorted({normalize_cn_symbol(symbol) for symbol in candidate_symbols}))
     codes = (*BENCHMARK_SYMBOLS, *(code for code in candidates if code not in BENCHMARK_SYMBOLS))
-    query_end_date = captured_at.date()
+    query_end_date = query_clock.date()
     query_start_date = query_end_date - timedelta(days=lookback_calendar_days)
 
     provider_name = _required_provider_text(provider.name, "provider.name")
@@ -295,7 +304,22 @@ def collect_cn_market_data(
                 if collection_error is None:
                     raise CollectionError(f"provider logout failed: {exc}") from exc
 
-    latest_session = _resolve_latest_market_session(series_by_code, captured_at)
+    provider_retrieval_times = [
+        series.retrieved_at for series in series_by_code.values() if series.retrieved_at is not None
+    ]
+    if provider_retrieval_times and len(provider_retrieval_times) != len(series_by_code):
+        raise CollectionError(
+            "provider supplied retrieved_at for only some daily series; refusing an ambiguous "
+            "collection timestamp"
+        )
+    if provider_retrieval_times:
+        collection_retrieved_at = max(provider_retrieval_times)
+    elif retrieved_at is not None:
+        collection_retrieved_at = query_clock
+    else:
+        collection_retrieved_at = datetime.now(SHANGHAI_TZ)
+
+    latest_session = _resolve_latest_market_session(series_by_code, collection_retrieved_at)
     instruments = tuple(
         _derive_instrument(
             code,
@@ -306,7 +330,7 @@ def collect_cn_market_data(
         for code in codes
     )
     return MarketDataCollection(
-        retrieved_at=captured_at,
+        retrieved_at=collection_retrieved_at,
         query_start_date=query_start_date,
         query_end_date=query_end_date,
         latest_session=latest_session,
@@ -344,35 +368,6 @@ def normalize_cn_symbol(raw_symbol: str) -> str:
 
 # Public compatibility name used by the seed/snapshot builder.
 normalize_baostock_symbol = normalize_cn_symbol
-
-
-def derive_adjacent_close_fields(bars: Sequence[DailyBar]) -> tuple[DailyBar, ...]:
-    """Fill only safely derivable prior-close fields on sorted unadjusted raw bars."""
-
-    result: list[DailyBar] = []
-    previous: DailyBar | None = None
-    origin = "derived_from_adjacent_unadjusted_close"
-    for bar in bars:
-        current = bar
-        if (
-            previous is not None
-            and previous.trade_date < bar.trade_date
-            and previous.close > 0
-            and bar.preclose is None
-            and bar.pct_chg is None
-        ):
-            provenance = dict(bar.field_provenance)
-            provenance["preclose"] = origin
-            provenance["pct_chg"] = origin
-            current = replace(
-                bar,
-                preclose=previous.close,
-                pct_chg=((bar.close / previous.close) - Decimal(1)) * Decimal(100),
-                field_provenance=provenance,
-            )
-        result.append(current)
-        previous = bar
-    return tuple(result)
 
 
 def _fetch_canonical_or_legacy_series(
@@ -474,10 +469,17 @@ def _validate_series(
     if not statuses:
         raise CollectionError(f"{expected_code} has no session observations")
     metadata = _safe_metadata(series.metadata, f"{expected_code}.metadata")
+    series_retrieved_at = None
+    if series.retrieved_at is not None:
+        try:
+            series_retrieved_at = _normalize_retrieved_at(series.retrieved_at)
+        except ValueError as exc:
+            raise CollectionError(f"{expected_code} {exc}") from exc
     return DailySeries(
         code=expected_code,
         bars=tuple(bars_by_date[item] for item in sorted(bars_by_date)),
         session_statuses={item: statuses[item] for item in sorted(statuses)},
+        retrieved_at=series_retrieved_at,
         metadata=metadata,
         adjustment="none",
     )

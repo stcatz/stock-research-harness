@@ -27,12 +27,17 @@ class _Client:
         self.histories = histories
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.snapshot_overrides: dict[str, dict[str, Any]] = {}
+        self.snapshot_items_overrides: dict[str, list[dict[str, Any]]] = {}
+        self.retrieved_times = {
+            "historical": datetime(2026, 8, 17, 17, 59, tzinfo=SHANGHAI),
+            "snapshot": datetime(2026, 8, 17, 18, 0, tzinfo=SHANGHAI),
+        }
 
     def get(self, endpoint: str, params: dict[str, Any]) -> _Response:
         self.calls.append((endpoint, dict(params)))
         thscode = str(params["thscode"] if "thscode" in params else params["thscodes"])
-        retrieved_at = datetime(2026, 8, 17, 18, 0, tzinfo=SHANGHAI)
         if endpoint.endswith("/historical"):
+            retrieved_at = self.retrieved_times["historical"]
             data = {
                 "timestamp": (
                     self.histories[thscode][-1]["date_ms"] if self.histories[thscode] else None
@@ -40,6 +45,7 @@ class _Client:
                 "item": self.histories[thscode],
             }
         elif endpoint.endswith("/snapshot"):
+            retrieved_at = self.retrieved_times["snapshot"]
             latest = self.histories[thscode][-1]
             previous = self.histories[thscode][-2]
             item = {
@@ -57,7 +63,8 @@ class _Client:
                 "turnover": latest["turnover"],
             }
             item.update(self.snapshot_overrides.get(thscode, {}))
-            data = {"timestamp": None, "total": 1, "item": [item]}
+            items = self.snapshot_items_overrides.get(thscode, [item])
+            data = {"timestamp": None, "total": len(items), "item": items}
         else:  # pragma: no cover - assertion aid
             raise AssertionError(f"unexpected endpoint {endpoint}")
         return _Response(
@@ -102,6 +109,7 @@ class HiThinkProviderTests(unittest.TestCase):
 
         self.assertEqual(series.code, "sh.600000")
         self.assertEqual(len(series.bars), 12)
+        self.assertEqual(series.retrieved_at, self.client.retrieved_times["snapshot"])
         latest = series.bars[-1]
         self.assertEqual(latest.trade_status, "UNKNOWN")
         self.assertIsNone(latest.turn)
@@ -111,10 +119,9 @@ class HiThinkProviderTests(unittest.TestCase):
             latest.field_provenance["preclose"],
             "reported_snapshot_cross_validated",
         )
-        self.assertEqual(
-            series.bars[-2].field_provenance["pct_chg"],
-            "derived_from_adjacent_unadjusted_close",
-        )
+        self.assertIsNone(series.bars[-2].preclose)
+        self.assertIsNone(series.bars[-2].pct_chg)
+        self.assertEqual(series.bars[-2].field_provenance["pct_chg"], "UNKNOWN")
         self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "MATCHED")
         self.assertEqual(len(series.metadata["raw_artifacts"]), 2)
         self.assertEqual(series.metadata["raw_artifacts"][0]["sha256"], "1" * 64)
@@ -134,11 +141,51 @@ class HiThinkProviderTests(unittest.TestCase):
         self.assertEqual(self.client.calls[1][0], "/api/a-share-index/prices/snapshot")
         self.assertEqual(series.code, "sh.000001")
 
-    def test_snapshot_mismatch_is_disclosed_and_does_not_replace_history(self) -> None:
+    def test_series_retrieved_at_is_maximum_of_both_provider_responses(self) -> None:
+        self.client.retrieved_times["historical"] = datetime(2026, 8, 17, 18, 1, tzinfo=SHANGHAI)
+        self.client.retrieved_times["snapshot"] = datetime(2026, 8, 17, 18, 0, tzinfo=SHANGHAI)
+
+        series = self.provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+
+        self.assertEqual(series.retrieved_at, self.client.retrieved_times["historical"])
+
+    def test_snapshot_mismatch_fails_closed(self) -> None:
         self.client.snapshot_overrides["600000.SH"] = {
             "last_price": 999,
             "prev_price": 998,
             "price_change_ratio_pct": 0.1,
+        }
+
+        with self.assertRaisesRegex(CollectionError, "snapshot mismatch.*close"):
+            self.provider.fetch_daily_series(
+                "sh.600000",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 17),
+                is_benchmark=False,
+            )
+
+    def test_snapshot_unavailable_fails_closed(self) -> None:
+        self.client.snapshot_items_overrides["600000.SH"] = []
+
+        with self.assertRaisesRegex(CollectionError, "no matching entry"):
+            self.provider.fetch_daily_series(
+                "sh.600000",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 17),
+                is_benchmark=False,
+            )
+
+    def test_snapshot_preclose_may_differ_from_adjacent_raw_close_on_corporate_action(self) -> None:
+        # An ex-rights reference price is an exchange-reported value, not necessarily the prior
+        # unadjusted close. Only the explicit snapshot may supply it.
+        self.client.snapshot_overrides["600000.SH"] = {
+            "prev_price": "95",
+            "price_change_ratio_pct": str((Decimal(111) / Decimal(95) - 1) * Decimal(100)),
         }
 
         series = self.provider.fetch_daily_series(
@@ -148,15 +195,27 @@ class HiThinkProviderTests(unittest.TestCase):
             is_benchmark=False,
         )
 
-        latest = series.bars[-1]
-        self.assertEqual(latest.close, Decimal(111))
-        self.assertEqual(latest.preclose, Decimal(110))
+        self.assertEqual(series.bars[-2].close, Decimal(110))
+        self.assertIsNone(series.bars[-2].preclose)
+        self.assertEqual(series.bars[-1].preclose, Decimal(95))
         self.assertEqual(
-            latest.field_provenance["preclose"],
-            "derived_from_adjacent_unadjusted_close",
+            series.bars[-1].field_provenance["preclose"],
+            "reported_snapshot_cross_validated",
         )
-        self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "MISMATCH")
-        self.assertIn("close", series.metadata["snapshot_cross_check"]["mismatched_fields"])
+
+    def test_snapshot_internally_inconsistent_change_ratio_fails_closed(self) -> None:
+        self.client.snapshot_overrides["600000.SH"] = {
+            "prev_price": 110,
+            "price_change_ratio_pct": 99,
+        }
+
+        with self.assertRaisesRegex(CollectionError, "snapshot mismatch.*pct_chg"):
+            self.provider.fetch_daily_series(
+                "sh.600000",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 17),
+                is_benchmark=False,
+            )
 
     def test_empty_or_malformed_history_fails_closed(self) -> None:
         self.client.histories["600000.SH"] = []

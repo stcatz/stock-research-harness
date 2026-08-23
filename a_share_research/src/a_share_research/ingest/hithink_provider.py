@@ -18,7 +18,6 @@ from .market_data import (
     CollectionError,
     DailyBar,
     DailySeries,
-    derive_adjacent_close_fields,
 )
 
 _STOCK_HISTORY_ENDPOINT = "/api/a-share/prices/historical"
@@ -82,7 +81,6 @@ class HiThinkProvider:
         history_response = self._get(history_endpoint, history_params)
         history_data = _response_data(history_response, history_endpoint)
         bars, upstream_timestamp = _parse_history(code, history_data)
-        bars = derive_adjacent_close_fields(bars)
 
         snapshot_params = {"thscodes": thscode}
         snapshot_response = self._get(snapshot_endpoint, snapshot_params)
@@ -92,14 +90,18 @@ class HiThinkProvider:
             bars,
             snapshot_data,
         )
-        raw_artifacts = [
-            _response_artifact(history_response, history_endpoint),
-            _response_artifact(snapshot_response, snapshot_endpoint),
-        ]
+        history_artifact = _response_artifact(history_response, history_endpoint)
+        snapshot_artifact = _response_artifact(snapshot_response, snapshot_endpoint)
+        raw_artifacts = [history_artifact, snapshot_artifact]
+        retrieved_at = max(
+            _response_retrieved_at(history_response, history_endpoint),
+            _response_retrieved_at(snapshot_response, snapshot_endpoint),
+        )
         return DailySeries(
             code=code,
             bars=bars,
             session_statuses={bar.trade_date: UNKNOWN for bar in bars},
+            retrieved_at=retrieved_at,
             metadata={
                 "adapter": "hithink-financial-api",
                 "history_endpoint": history_endpoint,
@@ -227,10 +229,7 @@ def _cross_check_latest_snapshot(
         and item["thscode"].upper() == thscode
     ]
     if not matching:
-        return bars, {
-            "status": "UNAVAILABLE",
-            "note": "Explicit snapshot returned no matching thscode; history was not modified.",
-        }
+        raise CollectionError(f"HiThink snapshot returned no matching entry for {thscode}")
     if len(matching) != 1:
         raise CollectionError(f"HiThink snapshot returned duplicate entries for {thscode}")
 
@@ -267,18 +266,9 @@ def _cross_check_latest_snapshot(
     )
     if calculated_pct is None or abs(calculated_pct - pct_chg) > _PCT_TOLERANCE:
         mismatched.append("pct_chg")
-    if latest.preclose is not None and latest.preclose != previous_close:
-        mismatched.append("preclose")
-
     if mismatched:
-        return bars, {
-            "status": "MISMATCH",
-            "mismatched_fields": sorted(set(mismatched)),
-            "note": (
-                "Snapshot has no session date; mismatched values were not used to modify the "
-                "latest historical bar."
-            ),
-        }
+        fields = ", ".join(sorted(set(mismatched)))
+        raise CollectionError(f"HiThink snapshot mismatch for {thscode}: {fields}")
 
     provenance = dict(latest.field_provenance)
     provenance["preclose"] = "reported_snapshot_cross_validated"
@@ -303,14 +293,12 @@ def _response_artifact(response: Any, expected_endpoint: str) -> dict[str, Any]:
     if isinstance(response, Mapping):
         endpoint = response.get("endpoint", expected_endpoint)
         request_id = response.get("request_id")
-        retrieved_at = response.get("retrieved_at")
         body_sha256 = response.get("body_sha256") or response.get("sha256")
         params = response.get("non_sensitive_params", {})
         artifact_id = response.get("raw_artifact_id")
     else:
         endpoint = getattr(response, "endpoint", None)
         request_id = getattr(response, "request_id", None)
-        retrieved_at = getattr(response, "retrieved_at", None)
         body_sha256 = getattr(response, "body_sha256", None)
         params = getattr(response, "non_sensitive_params", None)
         artifact_id = getattr(response, "raw_artifact_id", None)
@@ -318,8 +306,7 @@ def _response_artifact(response: Any, expected_endpoint: str) -> dict[str, Any]:
         raise CollectionError(f"HiThink response endpoint mismatch for {expected_endpoint}")
     if not isinstance(request_id, str) or not request_id:
         raise CollectionError(f"HiThink {expected_endpoint} response omitted request_id")
-    if not isinstance(retrieved_at, datetime) or retrieved_at.tzinfo is None:
-        raise CollectionError(f"HiThink {expected_endpoint} response omitted retrieved_at")
+    normalized_retrieved_at = _response_retrieved_at(response, expected_endpoint)
     if not isinstance(body_sha256, str) or _SHA256_PATTERN.fullmatch(body_sha256) is None:
         raise CollectionError(f"HiThink {expected_endpoint} response omitted valid SHA-256")
     if not isinstance(params, Mapping):
@@ -327,7 +314,7 @@ def _response_artifact(response: Any, expected_endpoint: str) -> dict[str, Any]:
     artifact = {
         "endpoint": endpoint,
         "request_id": request_id,
-        "retrieved_at": retrieved_at.isoformat(),
+        "retrieved_at": normalized_retrieved_at.isoformat(),
         "sha256": body_sha256,
         "params": dict(params),
     }
@@ -336,6 +323,21 @@ def _response_artifact(response: Any, expected_endpoint: str) -> dict[str, Any]:
             raise CollectionError(f"HiThink {expected_endpoint} returned invalid artifact id")
         artifact["artifact_id"] = artifact_id
     return artifact
+
+
+def _response_retrieved_at(response: Any, expected_endpoint: str) -> datetime:
+    retrieved_at = (
+        response.get("retrieved_at")
+        if isinstance(response, Mapping)
+        else getattr(response, "retrieved_at", None)
+    )
+    if (
+        not isinstance(retrieved_at, datetime)
+        or retrieved_at.tzinfo is None
+        or retrieved_at.utcoffset() is None
+    ):
+        raise CollectionError(f"HiThink {expected_endpoint} response omitted retrieved_at")
+    return retrieved_at.astimezone(SHANGHAI_TZ)
 
 
 def _decimal(value: Any, field_name: str) -> Decimal:

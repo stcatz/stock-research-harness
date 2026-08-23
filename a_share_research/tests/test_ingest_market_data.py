@@ -183,6 +183,57 @@ class MarketDataCollectionTests(unittest.TestCase):
             fragment["provider"]["series_metadata"]["raw_artifact"]["sha256"], "a" * 64
         )
 
+    def test_actual_provider_response_times_override_injected_fallback_and_use_maximum(
+        self,
+    ) -> None:
+        provider_times = {
+            code: self.retrieved_at + timedelta(minutes=index + 1)
+            for index, code in enumerate((*BENCHMARK_SYMBOLS, self.candidate))
+        }
+        series_by_code = {
+            code: _canonical_series(
+                code,
+                self.session_dates,
+                retrieved_at=provider_times[code],
+            )
+            for code in (*BENCHMARK_SYMBOLS, self.candidate)
+        }
+
+        result = collect_cn_market_data(
+            [self.candidate],
+            provider=CanonicalProvider(series_by_code),
+            # This remains a deterministic query/fallback clock for tests, but must not
+            # overwrite timestamps actually observed on provider responses.
+            retrieved_at=self.retrieved_at,
+        )
+
+        self.assertEqual(result.retrieved_at, provider_times[self.candidate])
+        self.assertTrue(
+            all(
+                fragment["retrieved_at"] == provider_times[self.candidate].isoformat()
+                and fragment["available_at"] == provider_times[self.candidate].isoformat()
+                for fragment in result.evidence_fragments()
+            )
+        )
+
+    def test_naive_provider_response_time_is_rejected(self) -> None:
+        series_by_code = {
+            code: _canonical_series(code, self.session_dates)
+            for code in (*BENCHMARK_SYMBOLS, self.candidate)
+        }
+        series_by_code[self.candidate] = _canonical_series(
+            self.candidate,
+            self.session_dates,
+            retrieved_at=self.retrieved_at.replace(tzinfo=None),
+        )
+
+        with self.assertRaisesRegex(CollectionError, "retrieved_at must include a timezone"):
+            collect_cn_market_data(
+                [self.candidate],
+                provider=CanonicalProvider(series_by_code),
+                retrieved_at=self.retrieved_at,
+            )
+
     def test_benchmark_turnover_may_be_blank_but_candidate_turnover_may_not(self) -> None:
         provider = FakeProvider(self.rows_by_code)
         result = collect_cn_market_data(
@@ -300,7 +351,12 @@ def _daily_rows(
     return rows
 
 
-def _canonical_series(code: str, session_dates: Sequence[date]) -> DailySeries:
+def _canonical_series(
+    code: str,
+    session_dates: Sequence[date],
+    *,
+    retrieved_at: datetime | None = None,
+) -> DailySeries:
     bars: list[DailyBar] = []
     for index, session_date in enumerate(session_dates):
         close = 99 + index
@@ -341,6 +397,7 @@ def _canonical_series(code: str, session_dates: Sequence[date]) -> DailySeries:
         code=code,
         bars=tuple(bars),
         session_statuses={item: "UNKNOWN" for item in session_dates},
+        retrieved_at=retrieved_at,
         metadata={"raw_artifact": {"sha256": "a" * 64}},
     )
 
