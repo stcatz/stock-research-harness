@@ -127,7 +127,7 @@ CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定
 
 研究引擎运行时仍然只读取冻结 snapshot；联网只发生在显式的 `collect-snapshot` 或 `provider-probe` 命令中。`collect-snapshot` 把研究员维护的政策、公告、题材和候选 seed，与选定 provider 的结构化市场数据合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。默认 provider 仍是 BaoStock；显式选择 `hithink` 时会使用同花顺 Financial API。
 
-先复制 [research_seed.example.json](config/research_seed.example.json)，删除 `example_notice`，并把所有合成名称、URL、结论和人工复核项换成你已核验的真实内容。示例文件和仍含 `example.invalid`、`EXAMPLE_ONLY`、`[合成示例]` 等标记的副本会被采集器拒绝；seed 也不能预填行情或 `market_evidence_refs`。候选身份必须满足例如 `symbol=600000` 对应 `security_id=CN.SH.600000`。
+先复制 [research_seed.example.json](config/research_seed.example.json)，删除 `example_notice`，并把所有合成名称、URL、结论和人工复核项换成你已核验的真实内容。示例文件和仍含 `example.invalid`、`EXAMPLE_ONLY`、`[合成示例]` 等标记的副本会被采集器拒绝；每条 evidence 必须包含独立的 `published_at`、`effective_at`、`available_at`、`retrieved_at` 与 `as_of`，seed 也不能预填行情或 `market_evidence_refs`。候选身份必须满足例如 `symbol=600000` 对应 `security_id=CN.SH.600000`。
 
 ```bash
 cd ~/ai/stock/a_share_research
@@ -150,7 +150,8 @@ HiThink 接入位于采集层，不改变研究引擎和 DSH 工具。API Key �
 ```bash
 cd ~/ai/stock/a_share_research
 uv sync
-export HITHINK_FINANCE_API_KEY='你的 API Key'
+read -s HITHINK_FINANCE_API_KEY
+export HITHINK_FINANCE_API_KEY
 
 uv run a-share-research provider-probe \
   --provider hithink \
@@ -181,7 +182,7 @@ HiThink 模式会采集：
 - macOS：`~/Library/Application Support/stock-research-harness/raw/cn/hithink`
 - Linux：`${XDG_DATA_HOME:-~/.local/share}/stock-research-harness/raw/cn/hithink`
 
-可用 `--raw-store-root /absolute/private/path` 或 `STOCK_RESEARCH_RAW_STORE` 覆盖；解析后的目录如果位于源码仓库内会被拒绝。raw store 保存响应正文只为本地审计，不会进入 snapshot、报告、DSH session 或 Git。
+可用 `--raw-store-root /absolute/private/path` 或 `STOCK_RESEARCH_RAW_STORE` 覆盖；解析后的目录如果位于源码仓库或运行 workspace 内会被拒绝。raw store 保存响应正文只为本地审计，不会进入 snapshot、报告、DSH session 或 Git。
 
 HiThink 没有公开不可变 first-seen/vintage 契约，最新估值也不能冒充历史估值。因此即使启用原始响应审计，快照仍是 `RECONSTRUCTED_NON_PIT`，不能用于宣称严格历史 PIT 回放。
 
@@ -221,6 +222,6 @@ wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decisio
 
 ## 当前边界
 
-`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值和年度三表，但仍不提供官方公告抓取、严格 PIT、自动主题发现或数据再分发授权。HiThink 仓库代码采用 MIT 并不自动授予其数据的商业使用或再分发权；对外产品必须按账户协议另行确认。
+`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值和年度三表，但仍不提供官方公告抓取、严格 PIT、自动主题发现或数据再分发授权。上游根仓库有 MIT LICENSE，但其 Python 子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。任何代码许可证都不自动授予数据的商业使用或再分发权。
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。

@@ -854,7 +854,8 @@ CN 快照固定标记为 <code>RECONSTRUCTED_NON_PIT</code>，不能伪装成严
 HiThink 是显式 opt-in，并且 API Key 只从环境变量读取：
 
 ~~~bash
-export HITHINK_FINANCE_API_KEY='你的 API Key'
+read -s HITHINK_FINANCE_API_KEY
+export HITHINK_FINANCE_API_KEY
 
 uv run a-share-research provider-probe \
   --provider hithink \
@@ -926,7 +927,7 @@ bash ~/ai/stock/scripts/install_cn_launchd.sh \
 5. 行业资料。
 6. 新闻、论坛和社交媒体只作为线索，不作为最终事实。
 
-个人研究可以用 HiThink Financial API、Tushare、BaoStock 或 AKShare 做内部适配和交叉检查，但代码许可证不等于数据许可证。[HiThink Financial-API](https://github.com/HiThink-Tech/Financial-API) 的仓库许可证也不等于对上游数据的商业使用或再分发授权。收费 newsletter、公开数据服务或商业产品必须重新核对数据商和原始网站的抓取、缓存、展示与再分发条款。
+个人研究可以用 HiThink Financial API、Tushare、BaoStock 或 AKShare 做内部适配和交叉检查，但代码许可证不等于数据许可证。[HiThink Financial-API](https://github.com/HiThink-Tech/Financial-API) 根仓库的 LICENSE、Python 子项目元数据和实际数据访问授权也必须分别判断。本项目没有复制其 SDK，只实现公开 REST 合同；这不等于取得上游数据的商业使用或再分发授权。收费 newsletter、公开数据服务或商业产品必须重新核对数据商和原始网站的抓取、缓存、展示与再分发条款。
 
 ### 美股建议
 
