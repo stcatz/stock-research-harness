@@ -115,6 +115,9 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
         published_at = parse_datetime(
             evidence.get("published_at"), f"evidence[{index}].published_at"
         )
+        # ``effective_at`` is not a knowledge gate. A policy formally announced today may
+        # take effect next month and is still valid evidence at announcement availability.
+        # Keep it independent from published/available time so reports can show that distinction.
         parse_datetime(evidence.get("effective_at"), f"evidence[{index}].effective_at")
         available_at = parse_datetime(
             evidence.get("available_at"), f"evidence[{index}].available_at"
@@ -195,6 +198,8 @@ def _validate_facts(
         elif value is not None:
             raise ContractError(f"{prefix}.value must be null when status=unknown")
         fact_as_of = parse_datetime(fact.get("as_of"), f"{prefix}.as_of")
+        # Future-effective facts are allowed when the future effective date itself is already
+        # known. ``available_at`` below remains the anti-look-ahead boundary.
         parse_datetime(fact.get("effective_at"), f"{prefix}.effective_at")
         fact_available_at = parse_datetime(fact.get("available_at"), f"{prefix}.available_at")
         if fact_as_of > fact_available_at:

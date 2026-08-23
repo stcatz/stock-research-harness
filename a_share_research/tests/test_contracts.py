@@ -94,6 +94,17 @@ class SnapshotContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "effective_at"):
             validate_snapshot(invalid)
 
+    def test_announced_future_effective_event_remains_valid_known_evidence(self) -> None:
+        announced = copy.deepcopy(self.demo)
+        announced["evidence"][0]["effective_at"] = "2026-09-01T00:00:00+08:00"
+
+        validated = validate_snapshot(announced)
+
+        self.assertEqual(
+            validated.data["evidence"][0]["effective_at"],
+            "2026-09-01T00:00:00+08:00",
+        )
+
     def test_structured_facts_preserve_unknown_and_reject_fabricated_values(self) -> None:
         valid = copy.deepcopy(self.demo)
         valid["evidence"][0]["facts"] = [

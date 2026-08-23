@@ -154,6 +154,8 @@ def _evaluate_candidate(
     time_leak_refs: list[str] = []
     for evidence_ref in all_refs:
         evidence = snapshot.evidence_by_id[evidence_ref]
+        # Knowledge becomes usable when it was available, not when its legal/economic effect
+        # begins. Future-effective policies are legitimate announced catalysts.
         if (
             parse_datetime(evidence["available_at"], f"evidence.{evidence_ref}.available_at")
             <= request.decision_at
