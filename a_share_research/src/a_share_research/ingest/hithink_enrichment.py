@@ -126,6 +126,16 @@ class HiThinkEnrichmentError(CollectionError):
     """Raised when a provider response cannot support an honest enrichment result."""
 
 
+class _FutureStatementReportDate(HiThinkEnrichmentError):
+    """A single statement row claims a report date later than collection time.
+
+    The provider has been observed stamping a future disclosure date onto a
+    statement row (e.g. a pending half-year report date overwriting the prior
+    annual row). The row cannot be treated as already-published fact, but it
+    should be dropped as UNKNOWN instead of failing the whole collection.
+    """
+
+
 class HiThinkEnrichmentClient(Protocol):
     """Small structural boundary implemented by ``HiThinkClient`` and test fakes."""
 
@@ -854,7 +864,15 @@ def _collect_financials(
             rows: dict[int, _StatementRow] = {}
             for index, raw_item in enumerate(items):
                 item = _mapping(raw_item, f"{statement}.item[{index}]")
-                row = _parse_statement_row(statement, code, item, source, index)
+                try:
+                    row = _parse_statement_row(statement, code, item, source, index)
+                except _FutureStatementReportDate as exc:
+                    # A single row with a report date in the future is a provider
+                    # data anomaly (e.g. a pending half-year date overwriting the
+                    # annual row). Drop it as UNKNOWN rather than failing the whole
+                    # collection; the missing-period join note below records the gap.
+                    gaps[code].append(f"{statement} dropped a row: {exc}")
+                    continue
                 period_key = _datetime_to_ms(row.period_end)
                 if period_key in rows:
                     raise HiThinkEnrichmentError(
@@ -950,7 +968,9 @@ def _parse_statement_row(
     if report_date < period_end:
         raise HiThinkEnrichmentError(f"{prefix}.report_date_ms is earlier than period_end_ms")
     if report_date > source.retrieved_at.astimezone(UTC):
-        raise HiThinkEnrichmentError(f"{prefix}.report_date_ms is later than collection time")
+        raise _FutureStatementReportDate(
+            f"{prefix}.report_date_ms is later than collection time"
+        )
     fiscal_year = _positive_int(item.get("fiscal_year"), f"{prefix}.fiscal_year")
     if fiscal_year != period_end.astimezone(SHANGHAI_TZ).year:
         raise HiThinkEnrichmentError(f"{prefix}.fiscal_year does not match period_end_ms")

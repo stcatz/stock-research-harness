@@ -506,20 +506,32 @@ class HiThinkEnrichmentTests(unittest.TestCase):
             any("not present in all three" in gap for gap in result.data_gaps["000001.SZ"])
         )
 
-    def test_financial_report_date_after_collection_fails_closed(self) -> None:
+    def test_future_statement_report_date_is_dropped_as_unknown_not_a_failure(self) -> None:
+        # The provider has been observed stamping a pending half-year disclosure date
+        # onto a prior annual statement row. A row claiming a report date in the future
+        # must not be treated as already-published fact, but it should be dropped as
+        # UNKNOWN and recorded as a gap instead of failing the whole collection.
         responses = _valid_responses()
         income = responses[HITHINK_FINANCIAL_ENDPOINTS["income"]][0]
         income.data["item"][0]["report_date_ms"] = int(
             datetime(2027, 1, 1, tzinfo=UTC).timestamp() * 1000
         )
 
-        with self.assertRaisesRegex(HiThinkEnrichmentError, "report_date_ms"):
-            collect_hithink_enrichment(
-                _QueueClient(responses),
-                latest_session=SESSION,
-                candidate_thscodes=["600519.SH"],
-                page_size=2,
-            )
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        financials = [item for item in result.financial_periods if item.thscode == "600519.SH"]
+        self.assertTrue(financials)
+        self.assertTrue(
+            any("income dropped a row" in gap for gap in result.data_gaps["600519.SH"])
+        )
+        self.assertTrue(
+            any("not present in all three" in gap for gap in result.data_gaps["600519.SH"])
+        )
 
     def test_data_ready_timestamps_are_provenance_not_trading_session_boundaries(self) -> None:
         responses = _valid_responses()
