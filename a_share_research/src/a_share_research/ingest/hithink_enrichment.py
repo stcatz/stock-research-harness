@@ -53,6 +53,10 @@ _THSCODE_PATTERN = re.compile(r"[0-9]{6}\.(?:SH|SZ|BJ)\Z")
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
 _SAFE_ENDPOINT_PATTERN = re.compile(r"/api/[A-Za-z0-9_/-]+\Z")
+# The provider stamps data.timestamp with its own server assembly clock. A small skew
+# against the local retrieval clock is normal (observed within ~1.5s); only a timestamp
+# materially in the future indicates a broken or tampered provider response.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5
 
 _VALUATION_FIELDS: tuple[str, ...] = ("pe_ttm", "pe_mrq", "pb_mrq", "ps_ttm", "pcf_ttm")
 _FINANCIAL_FIELDS: Mapping[str, tuple[tuple[str, str], ...]] = MappingProxyType(
@@ -1254,7 +1258,8 @@ def _replace_gateway_source(
 ) -> ProviderResponseRef:
     if timestamp is not None:
         upstream_at = _datetime_from_ms(timestamp, "provider response.timestamp")
-        if upstream_at > source.retrieved_at.astimezone(UTC):
+        skew = (upstream_at - source.retrieved_at.astimezone(UTC)).total_seconds()
+        if skew > _CLOCK_SKEW_TOLERANCE_SECONDS:
             raise HiThinkEnrichmentError("provider response.timestamp is later than retrieval time")
     enriched = replace(source, upstream_timestamp_ms=timestamp)
     gateway.sources[-1] = enriched

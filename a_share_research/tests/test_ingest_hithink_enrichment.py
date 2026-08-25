@@ -610,7 +610,7 @@ class HiThinkEnrichmentTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 responses = _valid_responses()
                 response = responses[endpoint][0]
-                response.data["timestamp"] = int((response.retrieved_at.timestamp() + 1) * 1000)
+                response.data["timestamp"] = int((response.retrieved_at.timestamp() + 10) * 1000)
 
                 with self.assertRaisesRegex(HiThinkEnrichmentError, "later than retrieval"):
                     collect_hithink_enrichment(
@@ -619,6 +619,24 @@ class HiThinkEnrichmentTests(unittest.TestCase):
                         candidate_thscodes=["600519.SH"],
                         page_size=2,
                     )
+
+    def test_small_clock_skew_in_upstream_timestamp_is_tolerated(self) -> None:
+        # The provider stamps data.timestamp with its own assembly clock; a sub-second
+        # skew against local retrieval time must not fail the enrichment.
+        responses = _valid_responses()
+        for response in responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT]:
+            response.data["timestamp"] = int(
+                (response.retrieved_at.timestamp() + 0.5) * 1000
+            )
+
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        self.assertEqual(result.breadth.total, 3)
 
     def test_full_market_snapshot_uses_local_observation_time_not_assumed_eod(self) -> None:
         responses = _valid_responses()
