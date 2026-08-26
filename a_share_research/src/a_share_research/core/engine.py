@@ -13,6 +13,7 @@ from .contracts import (
     RunRequest,
     parse_datetime,
 )
+from .quality import build_research_queue, decorate_quality
 from .snapshot import ValidatedSnapshot
 from .utils import sha256_value
 
@@ -20,7 +21,7 @@ DECISION_ORDER = {"observe": 0, "continue_research": 1, "exclude": 2}
 ROLE_ORDER = {"core": 0, "midcap": 1, "elastic": 2, "follower": 3}
 HARD_RISK_FLAGS = {"ST", "SUSPENDED", "REGULATORY_MAJOR", "LIQUIDITY_INSUFFICIENT"}
 OFFICIAL_CATEGORIES = {"official_event", "company_disclosure", "policy", "regulatory"}
-METHOD_ID = "a-share-theme-v1"
+METHOD_ID = "a-share-theme-v1.1"
 
 
 def build_research_packet(
@@ -33,6 +34,7 @@ def build_research_packet(
     stable_seed = {
         "request": request.to_dict(),
         "snapshot_hash": snapshot.snapshot_hash,
+        "method_id": METHOD_ID,
     }
     seed_hash = sha256_value(stable_seed)
     run_id = f"cn-{request.decision_at.date().isoformat()}-{seed_hash[:12]}"
@@ -76,9 +78,11 @@ def build_research_packet(
             }
         )
 
+    decorate_quality(decisions, request.decision_at.isoformat())
     decisions.sort(
         key=lambda item: (
             DECISION_ORDER[item["decision"]],
+            -item["research_priority"],
             ROLE_ORDER[item["role"]],
             item["symbol"],
         )
@@ -110,6 +114,13 @@ def build_research_packet(
         "focus": focus,
         "excluded": excluded,
         "all_decisions": decisions,
+        "research_queue": build_research_queue(decisions),
+        "evaluation_protocol": {
+            "metric": "benchmark_relative_total_return",
+            "benchmark": "000906.SH",
+            "horizons_trading_days": [5, 20],
+            "immutable_sidecar_required": True,
+        },
         "warnings": warnings,
         "data_gaps": _unique_strings(
             gap for item in decisions for gap in item.get("data_gaps", [])
@@ -194,6 +205,7 @@ def _evaluate_candidate(
         "next_catalyst": next_catalyst_at > request.decision_at,
         "time_boundary": not time_leak_refs,
         "stage_not_declining": theme["stage"] != "declining",
+        "company_disclosure": bool(company_disclosure),
     }
 
     reasons: list[str] = []

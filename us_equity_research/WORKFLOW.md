@@ -74,11 +74,25 @@ Candidates need official primary evidence, structured market support, a transmis
 
 The engine writes:
 
+- `fact_packet.json`
 - `research_packet.json`
 - `report.md`
 - `manifest.json`
 
-The packet is the structured record. The report is the reader-facing rendering. The manifest pins stable hashes and file integrity. DSH never rewrites them.
+The fact packet contains only identity, evidence, deterministic facts/calculations, and valuation context. It excludes
+bull/bear thesis and the final state so an independent reviewer can remain thesis-blind. The research packet is the
+structured record. The report is the reader-facing rendering. The manifest pins stable hashes and file integrity.
+DSH never rewrites them.
+
+### F. Close the calibration loop
+
+After T+5 or T+20, append candidate and SPY returns through `outcome-record`. Never modify the historical artifact.
+`outcome-summary` and `outcome-history` include only observations available by their explicit `evaluation_at`, so
+future results cannot leak into an earlier review. This evaluates whether `observe`, `continue_research`, and `exclude`
+were meaningfully differentiated; it is not a trading signal.
+
+Before trusting repeated historical facts from a new provider snapshot, run `audit-drift` against the prior frozen
+snapshot. Historical revisions and observed-to-unknown regressions produce an alert and an immutable audit receipt.
 
 ## 5. Human review expectations
 

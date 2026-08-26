@@ -84,7 +84,31 @@ CREATE INDEX IF NOT EXISTS candidate_decisions_symbol_idx
 CREATE INDEX IF NOT EXISTS candidate_decisions_theme_idx
     ON candidate_decisions (theme_id, run_id);
 
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS decision_outcomes (
+    observation_id TEXT PRIMARY KEY,
+    observation_hash TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    candidate_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (
+        decision IN ('exclude', 'continue_research', 'observe')
+    ),
+    horizon_trading_days INTEGER NOT NULL CHECK(horizon_trading_days IN (5, 20)),
+    observed_at TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    candidate_return REAL NOT NULL,
+    benchmark_return REAL NOT NULL,
+    excess_return REAL NOT NULL,
+    benchmark_symbol TEXT NOT NULL CHECK(benchmark_symbol = 'SPY'),
+    source_url TEXT NOT NULL,
+    source_document_id TEXT NOT NULL,
+    UNIQUE(run_id, candidate_id, horizon_trading_days)
+);
+
+CREATE INDEX IF NOT EXISTS decision_outcomes_run_idx
+    ON decision_outcomes (run_id, horizon_trading_days, decision);
+
+PRAGMA user_version = 2;
 """
 
 

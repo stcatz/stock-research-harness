@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.stcatz.stock-research.cn-harness-daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ROOT__/scripts/run_cn_harness_daily.sh</string>
+    <string>--root</string>
+    <string>__ROOT__</string>
+    <string>--seed-json</string>
+    <string>__SEED_JSON__</string>
+    <string>--provider</string>
+    <string>__PROVIDER__</string>
+    <string>--dsh-bin</string>
+    <string>__DSH_BIN__</string>
+    <string>--profile</string>
+    <string>headless</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__ROOT__</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+    <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>20</integer><key>Minute</key><integer>45</integer></dict>
+  </array>
+  <key>RunAtLoad</key><false/>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>StandardOutPath</key><string>__ROOT__/.runtime/logs/cn-harness.stdout.log</string>
+  <key>StandardErrorPath</key><string>__ROOT__/.runtime/logs/cn-harness.stderr.log</string>
+</dict>
+</plist>

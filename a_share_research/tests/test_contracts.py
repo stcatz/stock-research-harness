@@ -62,6 +62,21 @@ class RunRequestTests(unittest.TestCase):
                 {**base, "snapshot": {"selector": "demo", "snapshot_id": "ignored"}}
             )
 
+    def test_artifact_result_schema_matches_the_paginated_reader(self) -> None:
+        schema_path = Path(__file__).resolve().parents[1] / "schemas" / "artifact-result.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+        self.assertIn("facts", schema["properties"]["section"]["enum"])
+        self.assertTrue(
+            {
+                "cursor",
+                "next_cursor",
+                "total_chars",
+                "content_sha256",
+            }.issubset(schema["required"])
+        )
+        self.assertEqual(schema["properties"]["market"]["const"], "CN")
+
 
 class SnapshotContractTests(unittest.TestCase):
     @classmethod

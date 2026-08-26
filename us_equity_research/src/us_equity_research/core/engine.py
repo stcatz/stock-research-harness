@@ -15,9 +15,10 @@ from .contracts import (
     RunRequest,
     parse_datetime,
 )
+from .quality import build_research_queue, decorate_quality
 from .snapshot import ValidatedSnapshot
 
-METHOD_ID = "us-equity-research-v0.1"
+METHOD_ID = "us-equity-research-v0.2"
 
 DECISION_LABELS = {
     "observe": "Observe",
@@ -43,7 +44,11 @@ def build_research_packet(
     generated_at: datetime,
 ) -> dict[str, Any]:
     selected_themes = _select_themes(snapshot.themes, request)
-    request_seed = {"request": request.to_dict(), "snapshot_hash": snapshot.snapshot_hash}
+    request_seed = {
+        "request": request.to_dict(),
+        "snapshot_hash": snapshot.snapshot_hash,
+        "method_id": METHOD_ID,
+    }
     seed_hash = _sha256_value(request_seed)
 
     packet: dict[str, Any] = {
@@ -86,9 +91,11 @@ def build_research_packet(
         if theme_decisions or request.workflow != "stock_research":
             theme_summaries.append(_theme_summary(theme, theme_decisions))
 
+    decorate_quality(all_decisions, request.decision_at.isoformat())
     all_decisions.sort(
         key=lambda item: (
             DECISION_ORDER[item["decision"]],
+            -item["research_priority"],
             item["theme_id"],
             ROLE_ORDER.get(item["role"], 99),
             item["symbol"],
@@ -110,6 +117,13 @@ def build_research_packet(
     packet["focus"] = focus
     packet["excluded"] = excluded
     packet["all_decisions"] = all_decisions
+    packet["research_queue"] = build_research_queue(all_decisions)
+    packet["evaluation_protocol"] = {
+        "metric": "benchmark_relative_total_return",
+        "benchmark": "SPY",
+        "horizons_trading_days": [5, 20],
+        "immutable_sidecar_required": True,
+    }
     packet["warnings"] = warnings
     packet["data_gaps"] = _unique_strings(
         [
@@ -254,6 +268,7 @@ def _evaluate_candidate(
         "candidate_id": f"{theme['theme_id']}:{candidate['security_id']}",
         "theme_id": theme["theme_id"],
         "theme_name": theme["name"],
+        "stage": stage,
         "security_id": candidate["security_id"],
         "symbol": candidate["symbol"],
         "name": candidate["name"],

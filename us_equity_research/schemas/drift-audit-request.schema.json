@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/us-equity-research/drift-audit-request.schema.json",
+  "title": "US-equity snapshot drift audit request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "market", "before_snapshot_id", "after_snapshot_id"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "US" },
+    "before_snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "maxLength": 128
+    },
+    "after_snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "maxLength": 128
+    }
+  }
+}

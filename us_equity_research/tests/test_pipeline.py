@@ -42,6 +42,7 @@ SUMMARY_FIELDS = {
     "gaps",
     "available_sections",
     "manifest_hash",
+    "research_queue_count",
 }
 ARTIFACT_RESULT_FIELDS = {
     "schema_version",
@@ -51,12 +52,17 @@ ARTIFACT_RESULT_FIELDS = {
     "content_type",
     "content",
     "truncated",
+    "cursor",
+    "next_cursor",
+    "total_chars",
+    "content_sha256",
     "relative_path",
 }
 IMMUTABLE_FILENAMES = {
     "request.json",
     "snapshot.json",
     "research_packet.json",
+    "fact_packet.json",
     "report.md",
     "summary.json",
     "manifest.json",
@@ -108,7 +114,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in result["focus"]], ["DEMOA", "DEMOB"])
         self.assertEqual(
             result["available_sections"],
-            ["summary", "report", "manifest", "packet"],
+            ["summary", "report", "manifest", "packet", "facts"],
         )
 
         run_dir = self.workspace / "artifacts" / "us" / "runs" / str(result["run_id"])
@@ -209,7 +215,16 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertEqual(
             set(manifest["paths"]),
-            {"run_dir", "request", "snapshot", "packet", "report", "summary", "manifest"},
+            {
+                "run_dir",
+                "request",
+                "snapshot",
+                "packet",
+                "facts",
+                "report",
+                "summary",
+                "manifest",
+            },
         )
         for filename, expected_hash in manifest["files"].items():
             self.assertEqual(expected_hash, sha256_file(run_dir / filename))
@@ -377,12 +392,14 @@ class PipelineTests(unittest.TestCase):
             "report": "report.md",
             "manifest": "manifest.json",
             "packet": "research_packet.json",
+            "facts": "fact_packet.json",
         }
         expected_content_types = {
             "summary": "application/json",
             "report": "text/markdown",
             "manifest": "application/json",
             "packet": "application/json",
+            "facts": "application/json",
         }
         for section, filename in expected_files.items():
             with self.subTest(section=section):

@@ -191,17 +191,22 @@ class ArtifactReadRequest:
     artifact_id: str
     section: str
     max_chars: int
+    cursor: int
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ArtifactReadRequest:
         data = require_mapping(raw, "request")
-        _reject_unknown_fields(data, {"artifact_id", "section", "max_chars"}, "request")
+        _reject_unknown_fields(
+            data,
+            {"artifact_id", "section", "max_chars", "cursor"},
+            "request",
+        )
         artifact_id = require_string(data.get("artifact_id"), "artifact_id")
         if not _is_safe_identifier(artifact_id):
             raise ContractError("artifact_id contains unsupported characters")
         section = require_string(data.get("section", "summary"), "section")
-        if section not in {"summary", "report", "manifest", "packet"}:
-            raise ContractError("section must be summary, report, manifest, or packet")
+        if section not in {"summary", "report", "manifest", "packet", "facts"}:
+            raise ContractError("section must be summary, report, manifest, packet, or facts")
         max_chars = data.get("max_chars", 12000)
         if (
             isinstance(max_chars, bool)
@@ -209,7 +214,10 @@ class ArtifactReadRequest:
             or not 500 <= max_chars <= 20000
         ):
             raise ContractError("max_chars must be an integer between 500 and 20000")
-        return cls(artifact_id=artifact_id, section=section, max_chars=max_chars)
+        cursor = data.get("cursor", 0)
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= 10_000_000:
+            raise ContractError("cursor must be an integer between 0 and 10000000")
+        return cls(artifact_id=artifact_id, section=section, max_chars=max_chars, cursor=cursor)
 
 
 def _is_safe_identifier(value: str) -> bool:

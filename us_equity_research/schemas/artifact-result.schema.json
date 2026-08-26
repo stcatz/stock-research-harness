@@ -12,6 +12,10 @@
     "content_type",
     "content",
     "truncated",
+    "cursor",
+    "next_cursor",
+    "total_chars",
+    "content_sha256",
     "relative_path"
   ],
   "properties": {
@@ -23,13 +27,17 @@
       "maxLength": 128
     },
     "section": {
-      "enum": ["summary", "report", "manifest", "packet"]
+      "enum": ["summary", "report", "manifest", "packet", "facts"]
     },
     "content_type": {
       "enum": ["application/json", "text/markdown"]
     },
     "content": { "type": "string" },
     "truncated": { "type": "boolean" },
+    "cursor": { "type": "integer", "minimum": 0 },
+    "next_cursor": { "type": ["integer", "null"], "minimum": 0 },
+    "total_chars": { "type": "integer", "minimum": 0 },
+    "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "relative_path": {
       "type": "string",
       "minLength": 1,

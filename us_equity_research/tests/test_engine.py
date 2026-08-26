@@ -108,6 +108,8 @@ class EngineTests(unittest.TestCase):
                 "focus",
                 "excluded",
                 "all_decisions",
+                "research_queue",
+                "evaluation_protocol",
                 "warnings",
                 "data_gaps",
                 "analysis_hash",
@@ -154,6 +156,7 @@ class EngineTests(unittest.TestCase):
                 "candidate_id",
                 "theme_id",
                 "theme_name",
+                "stage",
                 "security_id",
                 "symbol",
                 "name",
@@ -177,8 +180,17 @@ class EngineTests(unittest.TestCase):
                 "evidence",
                 "facts",
                 "calculations",
+                "evidence_state",
+                "research_priority",
+                "research_gaps",
+                "falsification_contract",
+                "evaluation_contract",
+                "valuation_profile",
             },
         )
+        self.assertGreaterEqual(demoa["research_priority"], 80)
+        self.assertEqual(demoa["evidence_state"], "sufficient")
+        self.assertEqual(demoa["falsification_contract"]["bull_thesis_visible"], False)
         self.assertEqual(demoa["decision_label"], "Observe")
         self.assertEqual(set(demoa["bull_case"]), {"text", "evidence_refs"})
         self.assertEqual(set(demoa["bear_case"]), {"text", "evidence_refs"})

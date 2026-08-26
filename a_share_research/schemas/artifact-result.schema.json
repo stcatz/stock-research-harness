@@ -1,51 +1,47 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/a-share-research/artifact-result.schema.json",
-  "title": "A-share research artifact summary",
+  "title": "A-share research artifact read result",
   "type": "object",
-  "additionalProperties": true,
+  "additionalProperties": false,
   "required": [
     "schema_version",
     "market",
-    "run_id",
     "artifact_id",
-    "status",
-    "writer_mode",
-    "data_mode",
-    "pit_quality",
-    "workflow",
-    "decision_at",
-    "snapshot_id",
-    "analysis_hash",
-    "counts",
-    "focus",
-    "warnings",
-    "gaps",
-    "available_sections"
+    "section",
+    "content_type",
+    "content",
+    "truncated",
+    "cursor",
+    "next_cursor",
+    "total_chars",
+    "content_sha256",
+    "relative_path"
   ],
   "properties": {
     "schema_version": { "const": "0.1" },
     "market": { "const": "CN" },
-    "run_id": { "type": "string" },
-    "artifact_id": { "type": "string" },
-    "status": { "const": "completed" },
-    "writer_mode": { "const": "engine" },
-    "data_mode": { "enum": ["fixture", "snapshot"] },
-    "pit_quality": {
-      "enum": ["FIXTURE", "P1", "P2", "P3", "RECONSTRUCTED_NON_PIT"]
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$",
+      "maxLength": 128
     },
-    "workflow": {
-      "enum": ["daily_report", "stock_research", "theme_research"]
+    "section": {
+      "enum": ["summary", "report", "manifest", "packet", "facts"]
     },
-    "decision_at": { "type": "string", "format": "date-time" },
-    "snapshot_id": { "type": "string" },
-    "analysis_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "focus": { "type": "array" },
-    "warnings": { "type": "array", "items": { "type": "string" } },
-    "gaps": { "type": "array", "items": { "type": "string" } },
-    "available_sections": {
-      "type": "array",
-      "items": { "enum": ["summary", "report", "manifest", "packet"] }
+    "content_type": {
+      "enum": ["application/json", "text/markdown"]
+    },
+    "content": { "type": "string" },
+    "truncated": { "type": "boolean" },
+    "cursor": { "type": "integer", "minimum": 0 },
+    "next_cursor": { "type": ["integer", "null"], "minimum": 0 },
+    "total_chars": { "type": "integer", "minimum": 0 },
+    "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
     }
   }
 }

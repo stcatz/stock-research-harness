@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/a-share-research/artifact-read-request.schema.json",
+  "title": "A-share artifact read request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifact_id"],
+  "properties": {
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "maxLength": 128
+    },
+    "section": {
+      "enum": ["summary", "report", "manifest", "packet", "facts"],
+      "default": "summary"
+    },
+    "max_chars": {
+      "type": "integer",
+      "minimum": 500,
+      "maximum": 20000,
+      "default": 12000
+    },
+    "cursor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000000,
+      "default": 0
+    }
+  }
+}

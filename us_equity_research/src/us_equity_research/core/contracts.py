@@ -13,7 +13,7 @@ WORKFLOWS = ("daily_report", "theme_research", "stock_research")
 SNAPSHOT_SELECTORS = ("demo", "latest", "id")
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.-]{0,14}$"
 ARTIFACT_ID_PATTERN = r"^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,128}$"
-ALLOWED_ARTIFACT_SECTIONS = ("summary", "report", "manifest", "packet")
+ALLOWED_ARTIFACT_SECTIONS = ("summary", "report", "manifest", "packet", "facts")
 SOURCE_LEVELS = ("official", "structured_market", "industry", "secondary")
 STAGES = ("discovery", "confirming", "expanding", "crowded", "diverging", "fading")
 ASSESSMENTS = ("strong", "medium", "weak", "unknown")
@@ -257,17 +257,22 @@ class ArtifactReadRequest:
     artifact_id: str
     section: str
     max_chars: int
+    cursor: int
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ArtifactReadRequest:
         data = require_mapping(raw, "request")
-        _reject_unknown_fields(data, {"artifact_id", "section", "max_chars"}, "request")
+        _reject_unknown_fields(
+            data,
+            {"artifact_id", "section", "max_chars", "cursor"},
+            "request",
+        )
 
         artifact_id = validate_identifier(data.get("artifact_id"), "artifact_id")
 
         section = require_string(data.get("section", "summary"), "section", strip=False)
         if section not in ALLOWED_ARTIFACT_SECTIONS:
-            raise ContractError("section must be summary, report, manifest, or packet")
+            raise ContractError("section must be summary, report, manifest, packet, or facts")
 
         max_chars = data.get("max_chars", 12000)
         if (
@@ -277,11 +282,21 @@ class ArtifactReadRequest:
         ):
             raise ContractError("max_chars must be an integer between 500 and 20000")
 
-        return cls(artifact_id=artifact_id, section=section, max_chars=max_chars)
+        cursor = data.get("cursor", 0)
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or not 0 <= cursor <= 10_000_000:
+            raise ContractError("cursor must be an integer between 0 and 10000000")
+
+        return cls(
+            artifact_id=artifact_id,
+            section=section,
+            max_chars=max_chars,
+            cursor=cursor,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "artifact_id": self.artifact_id,
             "section": self.section,
             "max_chars": self.max_chars,
+            "cursor": self.cursor,
         }

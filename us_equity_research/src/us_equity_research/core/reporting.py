@@ -138,6 +138,24 @@ def render_report(packet: dict[str, Any]) -> str:
             ]
         )
 
+    lines.extend(["", "## 可执行研究队列", ""])
+    if packet["research_queue"]:
+        for item in packet["research_queue"]:
+            lines.append(
+                f"- **{_text(item['name'])}（`{_cell(item['symbol'])}`）**："
+                f"优先级 `{_cell(item['research_priority'])}/100`，"
+                f"缺口 {_cell(len(item['gaps']))} 项，独立反方复核待完成。"
+            )
+            for gap in item["gaps"]:
+                lines.append(
+                    f"  - `{_cell(gap['gap_id'])}` [{_cell(gap['state'])}] "
+                    f"owner=`{_cell(gap['resolver'])}`；"
+                    f"转换条件：{_text(gap['transition_condition'])}；"
+                    f"截止：{_cell(gap['expires_at'])}"
+                )
+    else:
+        lines.append("- 本次没有待处理研究缺口。")
+
     all_gaps = _unique(
         [
             *packet["data_gaps"],
@@ -167,6 +185,8 @@ def _candidate_section(index: int, candidate: Mapping[str, Any]) -> list[str]:
         f"### {index}. {_text(candidate['name'])}（`{_cell(candidate['symbol'])}`）",
         "",
         f"- 研究状态：`{_cell(candidate['decision'])}`（{_text(candidate['decision_label'])}）",
+        f"- 研究优先级：`{_cell(candidate['research_priority'])}/100`",
+        f"- 证据状态：`{_cell(candidate['evidence_state'])}`",
         f"- 主题 / 角色：{_text(candidate['theme_name'])} / `{_cell(candidate['role'])}`",
         f"- 研究命题（推断）：{_text(candidate['thesis'])}",
         f"- 规则门槛：{_gate_summary(candidate['gates'])}",
@@ -241,6 +261,38 @@ def _candidate_section(index: int, candidate: Mapping[str, Any]) -> list[str]:
             + " |"
         )
 
+    lines.extend(
+        [
+            "",
+            "#### 估值横截面（确定性计算）",
+            "",
+            "| metric | status | value | snapshot_candidate_percentile | sample_size | industry_percentile | historical_percentile |",
+            "|---|---|---:|---:|---:|---|---|",
+        ]
+    )
+    for metric in candidate["valuation_profile"]["metrics"]:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    _cell(metric["metric"]),
+                    _cell(metric["status"]),
+                    _cell(metric["value"]),
+                    _cell(metric["snapshot_candidate_percentile"]),
+                    _cell(metric["sample_size"]),
+                    "UNKNOWN",
+                    "UNKNOWN",
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "> 分位范围仅为本次快照候选集，并非行业可比公司；缺失的行业和历史分位保持 UNKNOWN。",
+        ]
+    )
+
     bull = candidate["bull_case"]
     bear = candidate["bear_case"]
     risk = candidate["risk_verdict"]
@@ -261,6 +313,7 @@ def _candidate_section(index: int, candidate: Mapping[str, Any]) -> list[str]:
             f"- 证伪条件：{_join(candidate['invalidation_conditions'])}",
             f"- 数据缺口：{_join(candidate['data_gaps'])}",
             f"- 人工复核：{_join(candidate['manual_review_items'])}",
+            "- 独立证伪：待联网 Harness 仅基于事实层完成，且不向反方展示多方结论。",
             "",
         ]
     )

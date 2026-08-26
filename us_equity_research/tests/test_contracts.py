@@ -237,6 +237,10 @@ class ArtifactReadRequestTests(unittest.TestCase):
                 "content_type",
                 "content",
                 "truncated",
+                "cursor",
+                "next_cursor",
+                "total_chars",
+                "content_sha256",
                 "relative_path",
             ],
         )
@@ -250,6 +254,10 @@ class ArtifactReadRequestTests(unittest.TestCase):
                 "content_type",
                 "content",
                 "truncated",
+                "cursor",
+                "next_cursor",
+                "total_chars",
+                "content_sha256",
                 "relative_path",
             },
         )
@@ -261,7 +269,7 @@ class ArtifactReadRequestTests(unittest.TestCase):
         )
         self.assertEqual(
             schema["properties"]["section"]["enum"],
-            ["summary", "report", "manifest", "packet"],
+            ["summary", "report", "manifest", "packet", "facts"],
         )
         self.assertEqual(
             schema["properties"]["content_type"]["enum"],
@@ -269,6 +277,10 @@ class ArtifactReadRequestTests(unittest.TestCase):
         )
         self.assertEqual(schema["properties"]["content"]["type"], "string")
         self.assertEqual(schema["properties"]["truncated"]["type"], "boolean")
+        self.assertEqual(schema["properties"]["cursor"]["minimum"], 0)
+        self.assertEqual(schema["properties"]["next_cursor"]["type"], ["integer", "null"])
+        self.assertEqual(schema["properties"]["total_chars"]["minimum"], 0)
+        self.assertEqual(schema["properties"]["content_sha256"]["pattern"], "^[a-f0-9]{64}$")
         self.assertEqual(
             schema["properties"]["relative_path"]["pattern"],
             "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+",

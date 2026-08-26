@@ -55,7 +55,29 @@ CREATE TABLE IF NOT EXISTS candidate_decisions (
     PRIMARY KEY (run_id, candidate_id)
 );
 
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS decision_outcomes (
+    observation_id TEXT PRIMARY KEY,
+    observation_hash TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    candidate_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK(decision IN ('exclude', 'continue_research', 'observe')),
+    horizon_trading_days INTEGER NOT NULL CHECK(horizon_trading_days IN (5, 20)),
+    observed_at TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    candidate_return REAL NOT NULL,
+    benchmark_return REAL NOT NULL,
+    excess_return REAL NOT NULL,
+    benchmark_symbol TEXT NOT NULL CHECK(benchmark_symbol = '000906.SH'),
+    source_url TEXT NOT NULL,
+    source_document_id TEXT NOT NULL,
+    UNIQUE(run_id, candidate_id, horizon_trading_days)
+);
+
+CREATE INDEX IF NOT EXISTS decision_outcomes_run_idx
+    ON decision_outcomes (run_id, horizon_trading_days, decision);
+
+PRAGMA user_version = 2;
 """
 
 
@@ -73,7 +95,7 @@ def initialize_workspace(workspace: Path) -> dict[str, str]:
     return {
         "workspace": str(workspace),
         "database": str(database),
-        "schema_version": "1",
+        "schema_version": "2",
     }
 
 
@@ -87,6 +109,7 @@ def connect(path: Path) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(path, timeout=30.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 30000")
+    connection.execute("PRAGMA foreign_keys = ON")
     try:
         yield connection
         connection.commit()
@@ -111,9 +134,7 @@ def record_run(
                     snapshot_id, snapshot_hash, analysis_hash, data_mode, pit_quality,
                     status, warnings_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    status = excluded.status,
-                    warnings_json = excluded.warnings_json
+                ON CONFLICT(run_id) DO NOTHING
                 """,
             (
                 packet["run_id"],
@@ -133,6 +154,7 @@ def record_run(
                 packet["generated_at"],
             ),
         )
+        _assert_existing_run_matches(connection, packet, summary)
         paths = manifest["paths"]
         connection.execute(
             """
@@ -140,8 +162,7 @@ def record_run(
                     artifact_id, run_id, run_dir, summary_path, report_path,
                     packet_path, manifest_path, manifest_hash
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(artifact_id) DO UPDATE SET
-                    manifest_hash = excluded.manifest_hash
+                ON CONFLICT(artifact_id) DO NOTHING
                 """,
             (
                 packet["artifact_id"],
@@ -154,7 +175,13 @@ def record_run(
                 manifest["manifest_hash"],
             ),
         )
+        _assert_existing_artifact_matches(connection, packet, manifest)
         for decision in packet["all_decisions"]:
+            reasons_json = json.dumps(decision["reasons"], ensure_ascii=False)
+            evidence_refs_json = json.dumps(
+                decision["usable_evidence_refs"], ensure_ascii=False
+            )
+            data_gaps_json = json.dumps(decision["data_gaps"], ensure_ascii=False)
             connection.execute(
                 """
                     INSERT INTO candidate_decisions (
@@ -170,11 +197,31 @@ def record_run(
                     decision["name"],
                     decision["theme_id"],
                     decision["decision"],
-                    json.dumps(decision["reasons"], ensure_ascii=False),
-                    json.dumps(decision["usable_evidence_refs"], ensure_ascii=False),
-                    json.dumps(decision["data_gaps"], ensure_ascii=False),
+                    reasons_json,
+                    evidence_refs_json,
+                    data_gaps_json,
                 ),
             )
+            stored = connection.execute(
+                """
+                SELECT symbol, name, theme_id, decision, reasons_json,
+                       evidence_refs_json, data_gaps_json
+                FROM candidate_decisions
+                WHERE run_id = ? AND candidate_id = ?
+                """,
+                (packet["run_id"], decision["candidate_id"]),
+            ).fetchone()
+            expected = (
+                decision["symbol"],
+                decision["name"],
+                decision["theme_id"],
+                decision["decision"],
+                reasons_json,
+                evidence_refs_json,
+                data_gaps_json,
+            )
+            if stored is None or tuple(stored) != expected:
+                raise RuntimeError("stored candidate decision conflicts with immutable run")
 
 
 def artifact_record(workspace: Path, artifact_id: str) -> dict[str, str] | None:
@@ -187,3 +234,64 @@ def artifact_record(workspace: Path, artifact_id: str) -> dict[str, str] | None:
             (artifact_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def _assert_existing_run_matches(
+    connection: sqlite3.Connection,
+    packet: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    row = connection.execute(
+        """
+        SELECT artifact_id, workflow, subject, symbol, decision_at, generated_at,
+               snapshot_id, snapshot_hash, analysis_hash, data_mode, pit_quality,
+               status, warnings_json, created_at
+        FROM runs WHERE run_id = ?
+        """,
+        (packet["run_id"],),
+    ).fetchone()
+    expected = (
+        packet["artifact_id"],
+        packet["workflow"],
+        packet.get("subject"),
+        packet.get("symbol"),
+        packet["decision_at"],
+        packet["generated_at"],
+        packet["snapshot_id"],
+        packet["snapshot_hash"],
+        packet["analysis_hash"],
+        packet["data_mode"],
+        packet["pit_quality"],
+        summary["status"],
+        json.dumps(packet["warnings"], ensure_ascii=False),
+        packet["generated_at"],
+    )
+    if row is None or tuple(row) != expected:
+        raise RuntimeError("stored run conflicts with immutable research identity")
+
+
+def _assert_existing_artifact_matches(
+    connection: sqlite3.Connection,
+    packet: dict[str, Any],
+    manifest: dict[str, Any],
+) -> None:
+    row = connection.execute(
+        """
+        SELECT run_id, run_dir, summary_path, report_path, packet_path,
+               manifest_path, manifest_hash
+        FROM artifacts WHERE artifact_id = ?
+        """,
+        (packet["artifact_id"],),
+    ).fetchone()
+    paths = manifest["paths"]
+    expected = (
+        packet["run_id"],
+        paths["run_dir"],
+        paths["summary"],
+        paths["report"],
+        paths["packet"],
+        paths["manifest"],
+        manifest["manifest_hash"],
+    )
+    if row is None or tuple(row) != expected:
+        raise RuntimeError("stored artifact conflicts with immutable research identity")
