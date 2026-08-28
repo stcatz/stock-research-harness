@@ -6,28 +6,6 @@ from typing import Any
 from .utils import sha256_value
 
 VALUATION_METRICS = ("pe_ttm", "pe_mrq", "pb_mrq", "ps_ttm", "pcf_ttm")
-HARD_GATE_WEIGHTS = {
-    "official_event": 18,
-    "structured_market": 18,
-    "transmission_chain": 12,
-    "stage_not_declining": 12,
-}
-SOFT_GATE_WEIGHTS = {
-    "counter_thesis": 8,
-    "invalidation_conditions": 8,
-    "next_catalyst": 8,
-    "time_boundary": 8,
-    "company_disclosure": 8,
-}
-ROLE_BONUS = {"core": 5, "midcap": 4, "elastic": 2, "follower": 0}
-STAGE_BONUS = {
-    "organizing": 3,
-    "warming": 5,
-    "expanding": 5,
-    "climax": -8,
-    "diverging": -5,
-    "declining": -20,
-}
 HARD_RISK_FLAGS = {"ST", "SUSPENDED", "REGULATORY_MAJOR", "LIQUIDITY_INSUFFICIENT"}
 
 
@@ -36,12 +14,15 @@ def decorate_quality(decisions: list[dict[str, Any]], decision_at: str) -> None:
 
     for decision in decisions:
         decision["evidence_state"] = _evidence_state(decision)
-        decision["research_priority"] = _research_priority(decision)
+        # Compatibility alias: adapters that still read research_priority now receive the V2
+        # evidence-qualified attention score rather than a field-presence score.
+        decision["research_priority"] = decision["attention_score"]
         decision["research_gaps"] = _research_gaps(decision)
         decision["falsification_contract"] = _falsification_contract(decision)
         decision["evaluation_contract"] = _evaluation_contract(decision, decision_at)
         decision["valuation_profile"] = _valuation_profile(decision)
     _apply_cross_sectional_percentiles(decisions)
+    _assign_attention_buckets(decisions)
 
 
 def build_research_queue(decisions: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -52,6 +33,8 @@ def build_research_queue(decisions: Iterable[dict[str, Any]]) -> list[dict[str, 
             "name": decision["name"],
             "decision": decision["decision"],
             "research_priority": decision["research_priority"],
+            "attention_bucket": decision["attention_bucket"],
+            "opportunity_view": decision["opportunity_view"],
             "gaps": decision["research_gaps"],
             "falsification_contract": decision["falsification_contract"],
         }
@@ -71,25 +54,6 @@ def _evidence_state(decision: dict[str, Any]) -> str:
     return "sufficient"
 
 
-def _research_priority(decision: dict[str, Any]) -> int:
-    gates = decision["gates"]
-    hard_score = sum(weight for gate, weight in HARD_GATE_WEIGHTS.items() if gates.get(gate))
-    soft_score = sum(weight for gate, weight in SOFT_GATE_WEIGHTS.items() if gates.get(gate))
-    score = hard_score + soft_score
-    score += ROLE_BONUS.get(decision["role"], 0)
-    score += STAGE_BONUS.get(decision["stage"], 0)
-    score -= min(15, 3 * len(decision["data_gaps"]))
-    score -= min(8, 2 * len(decision["manual_review_items"]))
-    hard_risks = HARD_RISK_FLAGS.intersection(decision["risk_flags"])
-    if hard_risks:
-        score -= min(20, 5 * len(hard_risks))
-    if decision["decision"] == "exclude":
-        score = min(score, 39)
-    elif decision["decision"] == "continue_research":
-        score = min(score, 79)
-    return max(0, min(100, score))
-
-
 def _research_gaps(decision: dict[str, Any]) -> list[dict[str, Any]]:
     gaps: list[dict[str, Any]] = []
     gate_specs = {
@@ -107,6 +71,16 @@ def _research_gaps(decision: dict[str, Any]) -> list[dict[str, Any]]:
             "manual_review",
             "industry_research",
             "形成至少三段且可证伪的受益传导链",
+        ),
+        "candidate_impact_chain": (
+            "manual_review",
+            "industry_research",
+            "补齐候选级至少三环的事件→产业→公司经济影响链并逐环绑定证据",
+        ),
+        "opportunity_profile": (
+            "queryable_in_snapshot",
+            "opportunity_analyst",
+            "用冻结证据明确新信息、经济影响、预期差和市场定价；无法证明则保持 UNKNOWN",
         ),
         "counter_thesis": (
             "manual_review",
@@ -159,7 +133,7 @@ def _research_gaps(decision: dict[str, Any]) -> list[dict[str, Any]]:
                 state,
                 resolver,
                 f"取得并核验缺失项：{raw_gap}",
-                True,
+                raw_gap.startswith("BLOCKING:"),
             )
         )
     for item in decision["manual_review_items"]:
@@ -230,7 +204,9 @@ def _evaluation_contract(decision: dict[str, Any], decision_at: str) -> dict[str
         "contract_version": "0.1",
         "decision_at": decision_at,
         "candidate_id": decision["candidate_id"],
-        "outcome_metric": "benchmark_relative_total_return",
+        "attention_score": decision["attention_score"],
+        "opportunity_view": decision["opportunity_view"],
+        "outcome_metric": "benchmark_relative_unadjusted_close_return",
         "benchmark": {"symbol": "000906.SH", "name": "中证800"},
         "horizons_trading_days": [5, 20],
         "state_order": ["observe", "continue_research", "exclude"],
@@ -312,3 +288,22 @@ def _apply_cross_sectional_percentiles(decisions: list[dict[str, Any]]) -> None:
             entry["snapshot_candidate_percentile"] = round(
                 100 * (lower + 0.5 * equal) / len(values), 2
             )
+
+
+def _assign_attention_buckets(decisions: list[dict[str, Any]]) -> None:
+    for decision in decisions:
+        decision["attention_bucket"] = "closed" if decision["decision"] == "exclude" else "backlog"
+
+    open_items = sorted(
+        (decision for decision in decisions if decision["decision"] != "exclude"),
+        key=lambda item: (-item["attention_score"], item["symbol"], item["candidate_id"]),
+    )
+    deep_dive_count = 0
+    monitor_count = 0
+    for decision in open_items:
+        if decision["attention_score"] >= 50 and deep_dive_count < 3:
+            decision["attention_bucket"] = "deep_dive"
+            deep_dive_count += 1
+        elif decision["attention_score"] >= 30 and monitor_count < 5:
+            decision["attention_bucket"] = "monitor"
+            monitor_count += 1

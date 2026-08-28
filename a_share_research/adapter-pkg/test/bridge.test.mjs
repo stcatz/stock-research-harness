@@ -8,6 +8,8 @@ import {
   apply,
   callResearchCli,
   readArtifact,
+  readOutcomeHistory,
+  readResearchHistory,
   runResearchWorkflow,
   sanitizeArtifactReadResult,
   sanitizeResearchRunResult,
@@ -112,6 +114,24 @@ process.stdin.on('end', () => {
     return;
   }
 
+  if (command === 'research-history') {
+    finish(process.stdout, {
+      schema_version: '0.1', market: 'CN', evaluation_at: payload.evaluation_at,
+      candidate_filter_count: payload.candidate_ids?.length ?? null,
+      candidate_count: 1, returned_count: 1,
+      aging_counts: { active: 0, deprioritize: 1, close_review: 0, closed: 0 },
+      candidates: [{
+        candidate_id: payload.candidate_ids?.[0] ?? 'theme-test:CN.SH.600000',
+        symbol: '000000', latest_decision: 'continue_research', run_count: 10,
+        state_or_gap_transition_count: 1, consecutive_continue_research: 10,
+        last_progress_at: '2026-08-12T20:30:00+08:00', stale_days: 14,
+        aging_action: 'deprioritize'
+      }],
+      policy: { meaning: 'attention only' }
+    });
+    return;
+  }
+
   finish(process.stdout, {
     argv,
     workspace,
@@ -123,6 +143,7 @@ process.stdin.on('end', () => {
     artifact_id: 'cn-artifact-deadbeef1234',
     status: 'completed',
     writer_mode: 'engine',
+    method_id: 'a-share-theme-v2.0',
     data_mode: 'fixture',
     pit_quality: 'FIXTURE',
     workflow: payload.workflow,
@@ -145,7 +166,7 @@ process.stdin.on('end', () => {
   return pythonPath
 }
 
-test('apply registers the three business-level tool names', () => {
+test('apply registers the four business-level tool names', () => {
   const registered = []
   apply({
     tools: {
@@ -157,8 +178,43 @@ test('apply registers the three business-level tool names', () => {
 
   assert.deepEqual(
     registered.map((tool) => tool.name).sort(),
-    ['cn_artifact_read', 'cn_outcome_history', 'cn_research_run'],
+    ['cn_artifact_read', 'cn_outcome_history', 'cn_research_history', 'cn_research_run'],
   )
+})
+
+test('research history maps the bounded aging request', async () => {
+  const { projectRoot } = await makeTempProject()
+  await writeFakePython(projectRoot)
+  const result = await readResearchHistory(
+    {
+      evaluation_at: '2026-08-26T20:30:00+08:00',
+      limit: 50,
+      candidate_ids: ['theme-test:CN.SH.600000'],
+    },
+    { projectRoot },
+  )
+  assert.equal(result.market, 'CN')
+  assert.equal(result.candidate_count, 1)
+  assert.equal(result.candidate_filter_count, 1)
+  assert.equal(result.candidates[0].aging_action, 'deprioritize')
+
+  const unfiltered = await readResearchHistory(
+    { evaluation_at: '2026-08-26T20:30:00+08:00' },
+    { projectRoot },
+  )
+  assert.equal(unfiltered.candidate_filter_count, null)
+})
+
+test('outcome history uses the outcome contract rather than the research-aging contract', async () => {
+  const { projectRoot } = await makeTempProject()
+  await writeFakePython(projectRoot)
+  const result = await readOutcomeHistory(
+    { evaluation_at: '2026-08-26T20:30:00+08:00', limit: 10 },
+    { projectRoot },
+  )
+  assert.equal(result.market, 'CN')
+  assert.equal(result.run_count, 0)
+  assert.deepEqual(result.runs, [])
 })
 
 test('model-facing tools expose only real snapshots and require report reads for full reports', () => {
@@ -433,6 +489,7 @@ test('sanitize helpers whitelist the new canonical CLI payloads', () => {
     artifact_id: 'cn-artifact-demo',
     status: 'completed',
     writer_mode: 'engine',
+    method_id: 'a-share-theme-v2.0',
     data_mode: 'fixture',
     pit_quality: 'FIXTURE',
     workflow: 'daily_report',
@@ -485,6 +542,7 @@ test('sanitize helpers omit absent optional fields and remain lossless JSON', ()
     artifact_id: 'cn-artifact-demo',
     status: 'completed',
     writer_mode: 'engine',
+    method_id: 'a-share-theme-v2.0',
     data_mode: 'fixture',
     pit_quality: 'FIXTURE',
     workflow: 'daily_report',

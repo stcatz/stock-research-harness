@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -eu
+set -o pipefail
 
 umask 077
 
@@ -20,10 +21,14 @@ Options:
   --decision-at ISO      Timezone-aware cut-off after collection
   --top-n N              Focus candidate count, 1-20 (default: 9)
   --dsh-bin PATH         DeepSeek Harness executable (default: dsh from PATH)
-  --profile NAME         DSH profile (default: headless)
+  --profile NAME         Legacy alias for --judge-profile
+  --bear-profile NAME    Thesis-blind bear profile (default: web)
+  --judge-profile NAME   Final-judge profile (default: headless)
+  --bear-model-id ID     Auditable model label for the bear profile (default: UNKNOWN)
+  --judge-model-id ID    Auditable model label for the judge profile (default: UNKNOWN)
   -h, --help             Show this help
 
-This is an explicitly networked two-model Harness. It first runs the canonical collector and
+This is an explicitly networked two-profile Harness. It first runs the canonical collector and
 offline engine, then performs a thesis-blind bear review and a separate final web investigation.
 It never edits canonical artifacts or invokes any broker/order capability.
 EOF
@@ -44,7 +49,10 @@ SNAPSHOT_ID=
 DECISION_AT=
 TOP_N=9
 DSH_ARGUMENT=
-PROFILE=headless
+BEAR_PROFILE=web
+JUDGE_PROFILE=headless
+BEAR_MODEL_ID=UNKNOWN
+JUDGE_MODEL_ID=UNKNOWN
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -56,7 +64,11 @@ while [ "$#" -gt 0 ]; do
     --decision-at) [ "$#" -ge 2 ] || die "--decision-at requires a value"; DECISION_AT=$2; shift 2 ;;
     --top-n) [ "$#" -ge 2 ] || die "--top-n requires a value"; TOP_N=$2; shift 2 ;;
     --dsh-bin) [ "$#" -ge 2 ] || die "--dsh-bin requires a value"; DSH_ARGUMENT=$2; shift 2 ;;
-    --profile) [ "$#" -ge 2 ] || die "--profile requires a value"; PROFILE=$2; shift 2 ;;
+    --profile) [ "$#" -ge 2 ] || die "--profile requires a value"; JUDGE_PROFILE=$2; shift 2 ;;
+    --bear-profile) [ "$#" -ge 2 ] || die "--bear-profile requires a value"; BEAR_PROFILE=$2; shift 2 ;;
+    --judge-profile) [ "$#" -ge 2 ] || die "--judge-profile requires a value"; JUDGE_PROFILE=$2; shift 2 ;;
+    --bear-model-id) [ "$#" -ge 2 ] || die "--bear-model-id requires a value"; BEAR_MODEL_ID=$2; shift 2 ;;
+    --judge-model-id) [ "$#" -ge 2 ] || die "--judge-model-id requires a value"; JUDGE_MODEL_ID=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -86,7 +98,17 @@ else
   DSH_BIN=$(command -v dsh 2>/dev/null || true)
 fi
 [ -n "$DSH_BIN" ] && [ -x "$DSH_BIN" ] || die "DeepSeek Harness executable was not found"
-case "$PROFILE" in ''|*[!A-Za-z0-9._-]*) die "--profile contains unsupported characters" ;; esac
+for PROFILE_VALUE in "$BEAR_PROFILE" "$JUDGE_PROFILE"; do
+  case "$PROFILE_VALUE" in ''|*[!A-Za-z0-9._-]*) die "DSH profile contains unsupported characters" ;; esac
+done
+[ "$BEAR_PROFILE" != "$JUDGE_PROFILE" ] || \
+  die "bear and judge profiles must differ to preserve review independence"
+for MODEL_VALUE in "$BEAR_MODEL_ID" "$JUDGE_MODEL_ID"; do
+  case "$MODEL_VALUE" in ''|*[!A-Za-z0-9._:/@+-]*) die "model ID contains unsupported characters" ;; esac
+done
+if [ "$BEAR_MODEL_ID" != "UNKNOWN" ] && [ "$BEAR_MODEL_ID" = "$JUDGE_MODEL_ID" ]; then
+  die "declared bear and judge model IDs must differ when model versions are supplied"
+fi
 case "$TOP_N" in ''|*[!0-9]*) die "--top-n must be an integer from 1 to 20" ;; esac
 [ "$TOP_N" -ge 1 ] && [ "$TOP_N" -le 20 ] || die "--top-n must be an integer from 1 to 20"
 
@@ -132,15 +154,19 @@ import json
 from pathlib import Path
 import sys
 
-root = Path(sys.argv[1]) / "data" / "normalized"
+workspace = Path(sys.argv[1])
+root = workspace / ".runtime" / "harness" / "cn"
 candidates = []
-for path in root.glob("*/snapshot.json"):
+for path in root.glob("*/harness-manifest.json"):
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("market") != "CN":
             continue
-        retrieved = datetime.fromisoformat(payload["retrieved_at"].replace("Z", "+00:00"))
-        candidates.append((retrieved, payload["snapshot_id"]))
+        completed = datetime.fromisoformat(payload["completed_at"].replace("Z", "+00:00"))
+        snapshot_id = payload["snapshot_id"]
+        if not (workspace / "data" / "normalized" / snapshot_id / "snapshot.json").is_file():
+            continue
+        candidates.append((completed, snapshot_id))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
         continue
 print(max(candidates)[1] if candidates else "")' "$ROOT"
@@ -161,7 +187,8 @@ if [ -n "$DECISION_AT" ]; then
 fi
 
 printf 'run_cn_harness_daily: collecting, freezing and running canonical research\n' >&2
-if ! "$CANONICAL_RUNNER" "${CANONICAL_ARGUMENTS[@]}" >"$TMP_DIR/canonical.json"; then
+if ! "$CANONICAL_RUNNER" "${CANONICAL_ARGUMENTS[@]}" \
+    >"$TMP_DIR/canonical-runner-receipt.json"; then
   die "canonical daily research failed; online review was not started"
 fi
 
@@ -174,33 +201,104 @@ if not isinstance(value, str) or not value:
 print(value)' "$1" "$2"
 }
 
-ARTIFACT_ID=$(read_json_string "$TMP_DIR/canonical.json" artifact_id) || die "canonical result has no artifact_id"
-if [ -z "$DECISION_AT" ]; then
-  DECISION_AT=$(
-    "$PYTHON" -c 'import json
+ARTIFACT_ID=$(read_json_string "$TMP_DIR/canonical-runner-receipt.json" artifact_id) || \
+  die "canonical result has no artifact_id"
+if ! env PYTHONPATH="$ROOT/a_share_research/src" "$PYTHON" - \
+    "$ROOT" "$ARTIFACT_ID" "$TMP_DIR/canonical.json" \
+    "$TMP_DIR/artifact-integrity.json" <<'PY'
+import json
 from pathlib import Path
 import sys
 
-artifact = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-workspace = Path(sys.argv[2])
-database = workspace / "data" / "stock_research.sqlite3"
-import sqlite3
-with sqlite3.connect(database) as connection:
-    row = connection.execute(
-        "SELECT decision_at FROM runs WHERE artifact_id = ?", (artifact["artifact_id"],)
-    ).fetchone()
-if row is None:
-    raise SystemExit(3)
-print(row[0])' "$TMP_DIR/canonical.json" "$ROOT"
-  ) || die "could not resolve canonical decision_at"
+from a_share_research.core.pipeline import read_artifact
+from a_share_research.core.utils import write_json_atomic
+
+workspace = Path(sys.argv[1])
+artifact_id = sys.argv[2]
+output = Path(sys.argv[3])
+integrity_output = Path(sys.argv[4])
+cursor = 0
+parts = []
+expected_hash = None
+expected_total = None
+while True:
+    page = read_artifact(
+        {
+            "artifact_id": artifact_id,
+            "section": "summary",
+            "max_chars": 20000,
+            "cursor": cursor,
+        },
+        workspace,
+    )
+    if page["cursor"] != cursor:
+        raise SystemExit("non-contiguous canonical summary cursor")
+    if expected_hash is None:
+        expected_hash = page["content_sha256"]
+        expected_total = page["total_chars"]
+    elif (
+        page["content_sha256"] != expected_hash
+        or page["total_chars"] != expected_total
+    ):
+        raise SystemExit("canonical summary changed during paginated read")
+    parts.append(page["content"])
+    next_cursor = page["next_cursor"]
+    if next_cursor is None:
+        break
+    if next_cursor != cursor + len(page["content"]):
+        raise SystemExit("canonical summary returned a discontinuous cursor")
+    cursor = next_cursor
+text = "".join(parts)
+if len(text) != expected_total:
+    raise SystemExit("canonical summary length mismatch")
+summary = json.loads(text)
+if summary.get("artifact_id") != artifact_id:
+    raise SystemExit("canonical summary artifact_id mismatch")
+write_json_atomic(output, summary)
+sections = {}
+for section in ("facts", "report", "packet"):
+    page = read_artifact(
+        {
+            "artifact_id": artifact_id,
+            "section": section,
+            "max_chars": 20000,
+            "cursor": 0,
+        },
+        workspace,
+    )
+    sections[section] = {
+        "content_sha256": page["content_sha256"],
+        "total_chars": page["total_chars"],
+        "expected_pages": max(1, (page["total_chars"] + 19999) // 20000),
+    }
+write_json_atomic(
+    integrity_output,
+    {"artifact_id": artifact_id, "page_size": 20000, "sections": sections},
+)
+PY
+then
+  die "could not reconstruct the verified canonical summary"
 fi
+
+CANONICAL_SNAPSHOT_ID=$(read_json_string "$TMP_DIR/canonical.json" snapshot_id) || \
+  die "canonical summary has no snapshot_id"
+[ "$CANONICAL_SNAPSHOT_ID" = "$SNAPSHOT_ID" ] || die "canonical summary used another snapshot"
+DECISION_AT=$(read_json_string "$TMP_DIR/canonical.json" decision_at) || \
+  die "canonical summary has no decision_at"
 
 DRIFT_STATUS=not_available
 if [ -n "$PREVIOUS_SNAPSHOT_ID" ] && [ "$PREVIOUS_SNAPSHOT_ID" != "$SNAPSHOT_ID" ]; then
   printf 'run_cn_harness_daily: auditing cross-snapshot provider drift\n' >&2
-  if printf '%s\n' \
-      "{\"schema_version\":\"0.1\",\"market\":\"CN\",\"before_snapshot_id\":\"$PREVIOUS_SNAPSHOT_ID\",\"after_snapshot_id\":\"$SNAPSHOT_ID\"}" \
-      | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" audit-drift --request-json - \
+  if "$PYTHON" -c 'import json, sys
+print(json.dumps({
+    "schema_version": "0.1",
+    "market": "CN",
+    "before_snapshot_id": sys.argv[1],
+    "after_snapshot_id": sys.argv[2],
+    "decision_at": sys.argv[3],
+}))' "$PREVIOUS_SNAPSHOT_ID" "$SNAPSHOT_ID" "$DECISION_AT" \
+      | env PYTHONPATH="$ROOT/a_share_research/src" \
+          "$PYTHON" -m a_share_research.cli --workspace "$ROOT" audit-drift --request-json - \
           >"$TMP_DIR/drift.json"; then
     DRIFT_STATUS=$(read_json_string "$TMP_DIR/drift.json" status) || die "drift receipt has no status"
   else
@@ -208,6 +306,54 @@ if [ -n "$PREVIOUS_SNAPSHOT_ID" ] && [ "$PREVIOUS_SNAPSHOT_ID" != "$SNAPSHOT_ID"
   fi
 else
   printf '%s\n' '{"status":"not_available","reason":"no prior CN snapshot"}' >"$TMP_DIR/drift.json"
+fi
+
+printf 'run_cn_harness_daily: settling due T+5/T+20 outcomes from the frozen snapshot\n' >&2
+if ! "$PYTHON" -c 'import json, sys
+print(json.dumps({
+    "schema_version": "0.1",
+    "market": "CN",
+    "snapshot_id": sys.argv[1],
+    "evaluation_at": sys.argv[2],
+}))' "$SNAPSHOT_ID" "$DECISION_AT" \
+    | env PYTHONPATH="$ROOT/a_share_research/src" \
+        "$PYTHON" -m a_share_research.cli --workspace "$ROOT" \
+        outcome-settle-snapshot --request-json - >"$TMP_DIR/settlement.json"; then
+  die "automatic outcome settlement failed; online review was not started"
+fi
+
+printf 'run_cn_harness_daily: freezing outcome and candidate-history receipts\n' >&2
+if ! "$PYTHON" -c 'import json, sys
+print(json.dumps({
+    "schema_version": "0.1",
+    "market": "CN",
+    "evaluation_at": sys.argv[1],
+    "limit": 10,
+}))' "$DECISION_AT" \
+    | env PYTHONPATH="$ROOT/a_share_research/src" \
+        "$PYTHON" -m a_share_research.cli --workspace "$ROOT" \
+        outcome-history --request-json - >"$TMP_DIR/outcome-history.json"; then
+  die "could not freeze outcome history for final validation"
+fi
+if ! "$PYTHON" -c 'import json
+from pathlib import Path
+import sys
+
+canonical = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+candidate_ids = [item["candidate_id"] for item in canonical["candidate_index"]]
+if len(candidate_ids) > 50:
+    raise SystemExit("networked Harness supports at most 50 canonical candidates")
+print(json.dumps({
+    "schema_version": "0.1",
+    "market": "CN",
+    "evaluation_at": canonical["decision_at"],
+    "candidate_ids": candidate_ids,
+    "limit": 50,
+}, ensure_ascii=False))' "$TMP_DIR/canonical.json" \
+    | env PYTHONPATH="$ROOT/a_share_research/src" \
+        "$PYTHON" -m a_share_research.cli --workspace "$ROOT" \
+        research-history --request-json - >"$TMP_DIR/research-history.json"; then
+  die "could not freeze candidate history for final validation"
 fi
 
 render_prompt() {
@@ -227,31 +373,25 @@ render_prompt "$BEAR_TEMPLATE" \
 
 printf 'run_cn_harness_daily: running thesis-blind independent bear investigation\n' >&2
 BEAR_PROMPT=$("$PYTHON" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text(encoding="utf-8"), end="")' "$TMP_DIR/bear.prompt")
-if ! env -u HITHINK_FINANCE_API_KEY "$DSH_BIN" --profile "$PROFILE" "$BEAR_PROMPT" \
+if ! env -u HITHINK_FINANCE_API_KEY "$DSH_BIN" --profile "$BEAR_PROFILE" "$BEAR_PROMPT" \
     >"$TMP_DIR/bear.out"; then
   die "independent bear Harness call failed"
 fi
-if ! "$PYTHON" -c 'import json
-from pathlib import Path
-import sys
-
-try:
-    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    raise SystemExit(3)
-if payload.get("artifact_id") != sys.argv[2]:
-    raise SystemExit(3)
-if payload.get("review_mode") != "independent_bear":
-    raise SystemExit(3)
-if not isinstance(payload.get("candidates"), list):
-    raise SystemExit(3)' "$TMP_DIR/bear.out" "$ARTIFACT_ID"; then
+if ! env PYTHONPATH="$ROOT/a_share_research/src" \
+    "$PYTHON" -m a_share_research.core.harness_review normalize-bear \
+    --input "$TMP_DIR/bear.out" \
+    --output "$TMP_DIR/bear.json" \
+    --artifact-id "$ARTIFACT_ID" \
+    --decision-at "$DECISION_AT" \
+    --integrity-json "$TMP_DIR/artifact-integrity.json" \
+    --canonical-json "$TMP_DIR/canonical.json"; then
   die "independent bear output did not satisfy the JSON review contract"
 fi
 
 BEAR_JSON_STRING=$("$PYTHON" -c 'import json
 from pathlib import Path
 import sys
-print(json.dumps(Path(sys.argv[1]).read_text(encoding="utf-8"), ensure_ascii=False))' "$TMP_DIR/bear.out")
+print(json.dumps(Path(sys.argv[1]).read_text(encoding="utf-8"), ensure_ascii=False))' "$TMP_DIR/bear.json")
 render_prompt "$FINAL_TEMPLATE" \
   __ARTIFACT_ID__ "$ARTIFACT_ID" \
   __SNAPSHOT_ID__ "$SNAPSHOT_ID" \
@@ -261,9 +401,26 @@ render_prompt "$FINAL_TEMPLATE" \
 
 printf 'run_cn_harness_daily: running final online judge and opportunity discovery\n' >&2
 FINAL_PROMPT=$("$PYTHON" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text(encoding="utf-8"), end="")' "$TMP_DIR/final.prompt")
-if ! env -u HITHINK_FINANCE_API_KEY "$DSH_BIN" --profile "$PROFILE" "$FINAL_PROMPT" \
-    >"$TMP_DIR/memo.md"; then
+if ! env -u HITHINK_FINANCE_API_KEY "$DSH_BIN" --profile "$JUDGE_PROFILE" "$FINAL_PROMPT" \
+    >"$TMP_DIR/final.out"; then
   die "final Harness call failed"
+fi
+if ! env PYTHONPATH="$ROOT/a_share_research/src" \
+    "$PYTHON" -m a_share_research.core.harness_review render-final \
+    --input "$TMP_DIR/final.out" \
+    --artifact-id "$ARTIFACT_ID" \
+    --snapshot-id "$SNAPSHOT_ID" \
+    --decision-at "$DECISION_AT" \
+    --integrity-json "$TMP_DIR/artifact-integrity.json" \
+    --canonical-json "$TMP_DIR/canonical.json" \
+    --bear-json "$TMP_DIR/bear.json" \
+    --drift-json "$TMP_DIR/drift.json" \
+    --settlement-json "$TMP_DIR/settlement.json" \
+    --outcome-history-json "$TMP_DIR/outcome-history.json" \
+    --research-history-json "$TMP_DIR/research-history.json" \
+    --judgment-output "$TMP_DIR/final-judgment.json" \
+    --memo-output "$TMP_DIR/memo.md"; then
+  die "final Harness judgment did not satisfy the opportunity contract"
 fi
 if ! "$PYTHON" -c 'from pathlib import Path
 import sys
@@ -290,8 +447,15 @@ STAGING_OUTPUT="$OUTPUT_PARENT/.$SNAPSHOT_ID.tmp-$$"
 [ ! -e "$STAGING_OUTPUT" ] || die "temporary Harness output already exists"
 mkdir "$STAGING_OUTPUT"
 mv "$TMP_DIR/canonical.json" "$STAGING_OUTPUT/canonical.json"
+mv "$TMP_DIR/canonical-runner-receipt.json" \
+  "$STAGING_OUTPUT/canonical-runner-receipt.json"
+mv "$TMP_DIR/artifact-integrity.json" "$STAGING_OUTPUT/artifact-integrity.json"
 mv "$TMP_DIR/drift.json" "$STAGING_OUTPUT/drift.json"
-mv "$TMP_DIR/bear.out" "$STAGING_OUTPUT/independent-bear.json"
+mv "$TMP_DIR/settlement.json" "$STAGING_OUTPUT/settlement.json"
+mv "$TMP_DIR/outcome-history.json" "$STAGING_OUTPUT/outcome-history.json"
+mv "$TMP_DIR/research-history.json" "$STAGING_OUTPUT/research-history.json"
+mv "$TMP_DIR/bear.json" "$STAGING_OUTPUT/independent-bear.json"
+mv "$TMP_DIR/final-judgment.json" "$STAGING_OUTPUT/final-judgment.json"
 mv "$TMP_DIR/memo.md" "$STAGING_OUTPUT/opportunity-memo.md"
 
 CODE_REVISION=unknown
@@ -313,23 +477,52 @@ import sys
 
 root = Path(sys.argv[1])
 output = Path(sys.argv[2])
-bear_template = Path(sys.argv[9])
-final_template = Path(sys.argv[10])
+bear_template = Path(sys.argv[12])
+final_template = Path(sys.argv[13])
+dsh_binary = Path(sys.argv[15])
+bear_raw = Path(sys.argv[16])
+final_raw = Path(sys.argv[17])
 
 def digest(path):
     return sha256(path.read_bytes()).hexdigest()
 
+files = {
+    name: digest(output / name)
+    for name in (
+        "canonical.json",
+        "canonical-runner-receipt.json",
+        "artifact-integrity.json",
+        "drift.json",
+        "settlement.json",
+        "outcome-history.json",
+        "research-history.json",
+        "independent-bear.json",
+        "final-judgment.json",
+        "opportunity-memo.md",
+    )
+}
 stable = {
     "schema_version": "0.1",
     "market": "CN",
-    "harness_contract_version": "0.1",
+    "harness_contract_version": "0.2",
     "snapshot_id": sys.argv[3],
     "artifact_id": sys.argv[4],
     "decision_at": sys.argv[5],
     "drift_status": sys.argv[6],
-    "dsh_profile": sys.argv[7],
-    "code_revision": sys.argv[8],
-    "code_worktree_dirty": {"true": True, "false": False}.get(sys.argv[11]),
+    "dsh": {
+        "binary_name": dsh_binary.name,
+        "binary_sha256": digest(dsh_binary),
+        "bear_profile": sys.argv[7],
+        "judge_profile": sys.argv[8],
+        "review_profiles_distinct": sys.argv[7] != sys.argv[8],
+        "declared_models_distinct": (
+            None
+            if "UNKNOWN" in {sys.argv[9], sys.argv[10]}
+            else sys.argv[9] != sys.argv[10]
+        ),
+    },
+    "code_revision": sys.argv[11],
+    "code_worktree_dirty": {"true": True, "false": False}.get(sys.argv[14]),
     "network_boundary": {
         "collector_networked": True,
         "canonical_engine_networked": False,
@@ -338,22 +531,29 @@ stable = {
         "canonical_artifact_rewritten": False,
     },
     "model_calls": [
-        {"role": "independent_bear", "input_scope": "facts_only", "bull_thesis_visible": False},
-        {"role": "final_judge", "input_scope": "paginated_report_and_available_outcomes"},
+        {
+            "role": "independent_bear",
+            "declared_model_id": sys.argv[9],
+            "profile": sys.argv[7],
+            "input_scope": "facts_only",
+            "bull_thesis_visible": False,
+            "raw_output_sha256": digest(bear_raw),
+            "normalized_output_sha256": files["independent-bear.json"],
+        },
+        {
+            "role": "final_judge",
+            "declared_model_id": sys.argv[10],
+            "profile": sys.argv[8],
+            "input_scope": "paginated_report_bear_review_outcomes_and_research_history",
+            "raw_output_sha256": digest(final_raw),
+            "normalized_output_sha256": files["final-judgment.json"],
+        },
     ],
     "prompt_templates": {
         bear_template.relative_to(root).as_posix(): digest(bear_template),
         final_template.relative_to(root).as_posix(): digest(final_template),
     },
-    "files": {
-        name: digest(output / name)
-        for name in (
-            "canonical.json",
-            "drift.json",
-            "independent-bear.json",
-            "opportunity-memo.md",
-        )
-    },
+    "files": files,
 }
 manifest = {
     **stable,
@@ -367,7 +567,9 @@ manifest = {
     encoding="utf-8",
 )' \
   "$ROOT" "$STAGING_OUTPUT" "$SNAPSHOT_ID" "$ARTIFACT_ID" "$DECISION_AT" "$DRIFT_STATUS" \
-  "$PROFILE" "$CODE_REVISION" "$BEAR_TEMPLATE" "$FINAL_TEMPLATE" "$CODE_DIRTY"
+  "$BEAR_PROFILE" "$JUDGE_PROFILE" "$BEAR_MODEL_ID" "$JUDGE_MODEL_ID" \
+  "$CODE_REVISION" "$BEAR_TEMPLATE" "$FINAL_TEMPLATE" "$CODE_DIRTY" "$DSH_BIN" \
+  "$TMP_DIR/bear.out" "$TMP_DIR/final.out"
 chmod 600 "$STAGING_OUTPUT"/*
 "$PYTHON" -c 'import os
 from pathlib import Path

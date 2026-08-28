@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-BENCHMARK_SYMBOLS = ("sh.000001", "sz.399001", "sz.399006")
+BENCHMARK_SYMBOLS = ("sh.000001", "sz.399001", "sz.399006", "sh.000906")
 
 # BaoStock compatibility constants. They are deliberately not part of the canonical provider
 # protocol; only the BaoStock adapter and legacy injected test providers consume them.
@@ -32,6 +32,7 @@ DAILY_FIELDS = (
 )
 UNADJUSTED_FLAG = "3"
 MINIMUM_ACTIVE_SESSIONS = 11
+OUTCOME_WINDOW_ACTIVE_SESSIONS = 31
 DEFAULT_LOOKBACK_CALENDAR_DAYS = 60
 UNKNOWN = "UNKNOWN"
 NON_PIT_NOTICE = (
@@ -39,7 +40,7 @@ NON_PIT_NOTICE = (
     "This collection is RECONSTRUCTED_NON_PIT and must not be presented as strict PIT data."
 )
 BENCHMARK_COVERAGE_NOTE = (
-    "Coverage contains only the Shanghai Composite, Shenzhen Component and ChiNext indices. "
+    "Coverage contains the Shanghai Composite, Shenzhen Component, ChiNext and CSI 800 indices. "
     "It is not full-market breadth and contains no advancing/declining-stock counts."
 )
 DERIVATION_NOTE = (
@@ -208,9 +209,9 @@ class MarketDataCollection:
             if instrument.instrument_kind == "benchmark"
         ]
         return {
-            "regime": "UNKNOWN（仅采集三只宽基指数，未配置市场状态判定规则）",
+            "regime": "UNKNOWN（仅采集四只基准指数，未配置市场状态判定规则）",
             "breadth": "UNKNOWN（未采集全市场上涨/下跌家数）",
-            "liquidity": "UNKNOWN（三只指数与候选股成交额不能代表全市场流动性）",
+            "liquidity": "UNKNOWN（四只指数与候选股成交额不能代表全市场流动性）",
             "calculation_note": f"{BENCHMARK_COVERAGE_NOTE} {DERIVATION_NOTE}",
             "evidence_refs": benchmark_ids,
         }
@@ -647,7 +648,9 @@ def _evidence_fragment(
             "average_amount_5_sessions": average_amount,
             "derivation_note": DERIVATION_NOTE,
         },
-        "calculation_window": [bar.to_dict() for bar in instrument.bars[-MINIMUM_ACTIVE_SESSIONS:]],
+        "calculation_window": [
+            bar.to_dict() for bar in instrument.bars[-OUTCOME_WINDOW_ACTIVE_SESSIONS:]
+        ],
         "pit_quality": "RECONSTRUCTED_NON_PIT",
         "non_pit_notice": NON_PIT_NOTICE,
         "coverage_note": (

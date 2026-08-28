@@ -207,6 +207,7 @@ def _build_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "artifact_id": packet["artifact_id"],
         "status": "completed",
         "writer_mode": "engine",
+        "method_id": packet["method_id"],
         "data_mode": packet["data_mode"],
         "pit_quality": packet["pit_quality"],
         "workflow": packet["workflow"],
@@ -221,10 +222,33 @@ def _build_summary(packet: dict[str, Any]) -> dict[str, Any]:
                 "theme": item["theme_name"],
                 "decision": item["decision"],
                 "research_priority": item["research_priority"],
+                "attention_score": item["attention_score"],
+                "attention_bucket": item["attention_bucket"],
+                "opportunity_view": item["opportunity_view"],
+                "new_information": item["opportunity_profile"]["new_information"][
+                    "assessment"
+                ],
+                "economic_impact": item["opportunity_profile"]["economic_impact"][
+                    "assessment"
+                ],
+                "expectation_gap": item["opportunity_profile"]["expectation_gap"][
+                    "assessment"
+                ],
+                "market_pricing": item["opportunity_profile"]["market_pricing"][
+                    "assessment"
+                ],
                 "evidence_state": item["evidence_state"],
                 "reason": item["reasons"][0],
             }
             for item in packet["focus"]
+        ],
+        "candidate_index": [
+            {
+                "candidate_id": item["candidate_id"],
+                "symbol": item["symbol"],
+                "canonical_state": item["decision"],
+            }
+            for item in packet["all_decisions"]
         ],
         "warnings": packet["warnings"],
         "gaps": packet["data_gaps"],

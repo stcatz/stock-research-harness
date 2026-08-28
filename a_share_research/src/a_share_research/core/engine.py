@@ -13,6 +13,7 @@ from .contracts import (
     RunRequest,
     parse_datetime,
 )
+from .opportunity import assess_opportunity
 from .quality import build_research_queue, decorate_quality
 from .snapshot import ValidatedSnapshot
 from .utils import sha256_value
@@ -21,7 +22,7 @@ DECISION_ORDER = {"observe": 0, "continue_research": 1, "exclude": 2}
 ROLE_ORDER = {"core": 0, "midcap": 1, "elastic": 2, "follower": 3}
 HARD_RISK_FLAGS = {"ST", "SUSPENDED", "REGULATORY_MAJOR", "LIQUIDITY_INSUFFICIENT"}
 OFFICIAL_CATEGORIES = {"official_event", "company_disclosure", "policy", "regulatory"}
-METHOD_ID = "a-share-theme-v1.1"
+METHOD_ID = "a-share-theme-v2.0"
 
 
 def build_research_packet(
@@ -116,7 +117,7 @@ def build_research_packet(
         "all_decisions": decisions,
         "research_queue": build_research_queue(decisions),
         "evaluation_protocol": {
-            "metric": "benchmark_relative_total_return",
+            "metric": "benchmark_relative_unadjusted_close_return",
             "benchmark": "000906.SH",
             "horizons_trading_days": [5, 20],
             "immutable_sidecar_required": True,
@@ -157,7 +158,11 @@ def _evaluate_candidate(
     candidate: dict[str, Any],
 ) -> dict[str, Any]:
     evidence_refs = _unique_strings(
-        [*theme.get("evidence_refs", []), *candidate.get("evidence_refs", [])]
+        [
+            *theme.get("evidence_refs", []),
+            *candidate.get("evidence_refs", []),
+            *_opportunity_evidence_refs(candidate),
+        ]
     )
     market_refs = _unique_strings(candidate.get("market_evidence_refs", []))
     all_refs = _unique_strings([*evidence_refs, *market_refs])
@@ -193,16 +198,43 @@ def _evaluate_candidate(
 
     risk_flags = list(candidate.get("risk_flags", []))
     data_gaps = _unique_strings([*theme.get("data_gaps", []), *candidate.get("data_gaps", [])])
-    next_catalyst_at = parse_datetime(theme["next_catalyst_at"], "theme.next_catalyst_at")
+    opportunity = assess_opportunity(
+        theme,
+        candidate,
+        snapshot.evidence_by_id,
+        usable_refs,
+        request.decision_at,
+        benchmark_refs=[
+            ref
+            for ref in snapshot.data["market_context"].get("evidence_refs", [])
+            if ref in snapshot.evidence_by_id
+            and snapshot.evidence_by_id[ref]["source_level"] == "structured_market"
+            and parse_datetime(
+                snapshot.evidence_by_id[ref]["available_at"],
+                f"evidence.{ref}.available_at",
+            )
+            <= request.decision_at
+        ],
+    )
+    core_opportunity_factors = {
+        "new_information",
+        "economic_impact",
+        "expectation_gap",
+        "market_pricing",
+    }
     gates = {
         "official_event": bool(official_evidence),
         "structured_market": bool(structured_market),
         "transmission_chain": len(theme["transmission_chain"]) >= 3,
+        "candidate_impact_chain": opportunity["impact_chain"]["coverage_ratio"] >= 2 / 3,
+        "opportunity_profile": not core_opportunity_factors.intersection(
+            opportunity["missing_opportunity_factors"]
+        ),
         "counter_thesis": bool(candidate["counter_thesis"] and theme["counter_thesis"]),
         "invalidation_conditions": bool(
             candidate["invalidation_conditions"] and theme["invalidation_conditions"]
         ),
-        "next_catalyst": next_catalyst_at > request.decision_at,
+        "next_catalyst": opportunity["next_catalyst"]["evidence_qualified"],
         "time_boundary": not time_leak_refs,
         "stage_not_declining": theme["stage"] != "declining",
         "company_disclosure": bool(company_disclosure),
@@ -224,29 +256,37 @@ def _evaluate_candidate(
     if HARD_RISK_FLAGS.intersection(risk_flags):
         reasons.append("命中硬风险标志")
     if not gates["next_catalyst"]:
-        reasons.append("下一催化时间不晚于研究时点或不可用")
+        reasons.append("缺少由研究时点前正式证据支持的未来催化剂及核验规则")
     if not company_disclosure:
         reasons.append("缺少候选公司自身正式披露，业务纯度需人工复核")
-    if candidate.get("data_gaps"):
-        reasons.append("候选仍有关键数据缺口")
+    if opportunity["missing_opportunity_factors"]:
+        reasons.append(
+            "机会判断字段未被证据充分覆盖："
+            + ", ".join(opportunity["missing_opportunity_factors"])
+        )
 
-    hard_failure = (
+    qualification_incomplete = (
         not gates["official_event"]
         or not gates["structured_market"]
         or not gates["transmission_chain"]
-        or not gates["stage_not_declining"]
-        or bool(HARD_RISK_FLAGS.intersection(risk_flags))
     )
     theme_timely = theme["dimensions"]["timely"]["assessment"]
-    if hard_failure:
+    if opportunity["opportunity_view"] == "negative":
         decision = "exclude"
+        reasons.append("候选级预期差、市场定价或风险证据形成负向机会判断")
+    elif qualification_incomplete:
+        decision = "continue_research"
+        reasons.append("资格证据尚未齐全，保留在低注意力调查队列而不是自动排除")
+    elif not (
+        opportunity["opportunity_view"] == "positive"
+        and gates["time_boundary"]
+        and gates["company_disclosure"]
+        and gates["next_catalyst"]
+    ):
+        decision = "continue_research"
     elif (
         theme["stage"] in {"climax", "diverging"}
         or theme_timely in {"weak", "unknown"}
-        or not gates["time_boundary"]
-        or not gates["next_catalyst"]
-        or not company_disclosure
-        or bool(candidate.get("data_gaps"))
     ):
         decision = "continue_research"
     else:
@@ -270,7 +310,12 @@ def _evaluate_candidate(
         "thesis": candidate["thesis"],
         "counter_thesis": candidate["counter_thesis"],
         "transmission_chain": list(theme["transmission_chain"]),
-        "next_catalyst_at": theme["next_catalyst_at"],
+        "impact_chain": opportunity["impact_chain"],
+        "method_dimensions": opportunity["method_dimensions"],
+        "opportunity_profile": opportunity,
+        "opportunity_view": opportunity["opportunity_view"],
+        "attention_score": opportunity["attention_score"],
+        "next_catalyst_at": opportunity["next_catalyst"]["scheduled_at"],
         "invalidation_conditions": _unique_strings(
             [*theme["invalidation_conditions"], *candidate["invalidation_conditions"]]
         ),
@@ -285,6 +330,28 @@ def _evaluate_candidate(
         "market_evidence_refs": [item["evidence_id"] for item in structured_market],
         "evidence": [_evidence_card(snapshot.evidence_by_id[ref]) for ref in usable_refs],
     }
+
+
+def _opportunity_evidence_refs(candidate: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    profile = candidate.get("opportunity_profile")
+    if isinstance(profile, dict):
+        for name in (
+            "new_information",
+            "economic_impact",
+            "expectation_gap",
+            "market_pricing",
+            "next_catalyst",
+        ):
+            factor = profile.get(name)
+            if isinstance(factor, dict) and isinstance(factor.get("evidence_refs"), list):
+                refs.extend(factor["evidence_refs"])
+    chain = candidate.get("impact_chain")
+    if isinstance(chain, list):
+        for step in chain:
+            if isinstance(step, dict) and isinstance(step.get("evidence_refs"), list):
+                refs.extend(step["evidence_refs"])
+    return _unique_strings(refs)
 
 
 def _build_warnings(
@@ -357,6 +424,7 @@ def _evidence_card(evidence: dict[str, Any]) -> dict[str, Any]:
         "as_of": evidence["as_of"],
         "summary": evidence["summary"],
         "facts": deepcopy(evidence.get("facts", [])),
+        "document": deepcopy(evidence.get("document")),
     }
 
 

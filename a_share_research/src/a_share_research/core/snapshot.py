@@ -4,6 +4,8 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,25 @@ PIT_QUALITIES = {"P1", "P2", "P3", "RECONSTRUCTED_NON_PIT", "FIXTURE"}
 DATA_MODES = {"snapshot", "fixture"}
 ROLES = {"core", "midcap", "elastic", "follower"}
 FACT_STATUSES = {"observed", "unknown"}
+OPPORTUNITY_STRENGTHS = {"strong", "medium", "weak", "unknown"}
+EXPECTATION_ASSESSMENTS = {"positive", "neutral", "negative", "unknown"}
+EXPECTATION_BASELINES = {
+    "consensus",
+    "management_guidance",
+    "historical",
+    "market_implied",
+    "none",
+}
+MARKET_PRICING_ASSESSMENTS = {
+    "underreacted",
+    "confirmed",
+    "overreacted",
+    "contradicted",
+    "unknown",
+}
+IMPACT_STATUSES = {"supported", "partial", "unknown", "contradicted"}
+MAGNITUDE_STATUSES = {"quantified", "partial", "unknown"}
+MAGNITUDE_BASES = {"revenue", "profit", "cash_flow", "capex", "assets", "other", "unknown"}
 
 
 @dataclass(frozen=True)
@@ -141,6 +162,7 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
                 f"evidence[{index}].retrieved_at must not be later than snapshot.retrieved_at"
             )
         _validate_facts(evidence.get("facts", []), index, available_at, retrieved_at)
+        _validate_document(evidence.get("document"), index)
         evidence_by_id[evidence_id] = evidence
     ensure_unique((item["evidence_id"] for item in evidence_items), "snapshot.evidence")
     _validate_market_context(data.get("market_context"), evidence_by_id)
@@ -213,6 +235,31 @@ def _validate_facts(
                 f"{prefix}.available_at must not be later than its evidence retrieved_at"
             )
     ensure_unique(fact_ids, field)
+
+
+def _validate_document(raw: Any, evidence_index: int) -> None:
+    if raw is None:
+        return
+    field = f"evidence[{evidence_index}].document"
+    document = require_mapping(raw, field)
+    document_id = require_string(document.get("source_document_id"), f"{field}.source_document_id")
+    if len(document_id) > 256:
+        raise ContractError(f"{field}.source_document_id is too long")
+    media_type = require_string(document.get("media_type"), f"{field}.media_type")
+    if media_type not in {"text/plain", "text/html", "application/pdf"}:
+        raise ContractError(f"{field}.media_type is unsupported")
+    extraction_method = require_string(
+        document.get("extraction_method"), f"{field}.extraction_method"
+    )
+    if extraction_method not in {"manual_verified", "pdf_text_layer", "ocr", "html_text"}:
+        raise ContractError(f"{field}.extraction_method is unsupported")
+    text = require_string(document.get("text"), f"{field}.text")
+    if len(text) > 100_000:
+        raise ContractError(f"{field}.text exceeds 100000 characters")
+    text_hash = require_string(document.get("text_sha256"), f"{field}.text_sha256")
+    actual_hash = sha256(text.encode("utf-8")).hexdigest()
+    if text_hash != actual_hash:
+        raise ContractError(f"{field}.text_sha256 does not match text")
 
 
 def _validate_market_context(raw: Any, evidence_by_id: Mapping[str, Any]) -> None:
@@ -303,6 +350,16 @@ def _validate_theme(
             candidate.get("manual_review_items"),
             f"{candidate_prefix}.manual_review_items",
         )
+        _validate_opportunity_profile(
+            candidate.get("opportunity_profile"),
+            f"{candidate_prefix}.opportunity_profile",
+            evidence_by_id,
+        )
+        _validate_impact_chain(
+            candidate.get("impact_chain"),
+            f"{candidate_prefix}.impact_chain",
+            evidence_by_id,
+        )
     ensure_unique(
         (candidate["security_id"] for candidate in candidates),
         f"{prefix}.candidates",
@@ -323,6 +380,165 @@ def _validate_string_list(raw: Any, field: str, *, allow_empty: bool = False) ->
         raise ContractError(f"{field} must not be empty")
     for index, item in enumerate(items):
         require_string(item, f"{field}[{index}]")
+
+
+def _validate_opportunity_profile(
+    raw: Any,
+    field: str,
+    evidence_by_id: Mapping[str, Any],
+) -> None:
+    # V2 fields are optional so immutable V1 snapshots remain replayable.  Once present, the
+    # complete factor contract is required; partial prose must not masquerade as a scored profile.
+    if raw is None:
+        return
+    profile = require_mapping(raw, field)
+    required = {
+        "new_information",
+        "economic_impact",
+        "expectation_gap",
+        "market_pricing",
+        "next_catalyst",
+    }
+    missing = sorted(required - set(profile))
+    if missing:
+        raise ContractError(f"{field} is missing required fields: " + ", ".join(missing))
+
+    for name in ("new_information", "economic_impact"):
+        factor = require_mapping(profile.get(name), f"{field}.{name}")
+        assessment = require_string(factor.get("assessment"), f"{field}.{name}.assessment")
+        if assessment not in OPPORTUNITY_STRENGTHS:
+            raise ContractError(
+                f"{field}.{name}.assessment must be one of {sorted(OPPORTUNITY_STRENGTHS)}"
+            )
+        require_string(factor.get("reason"), f"{field}.{name}.reason")
+        _validate_refs(factor.get("evidence_refs"), f"{field}.{name}.evidence_refs", evidence_by_id)
+        if name == "economic_impact":
+            _validate_magnitude(factor.get("magnitude"), f"{field}.{name}.magnitude")
+
+    expectation = require_mapping(profile.get("expectation_gap"), f"{field}.expectation_gap")
+    expectation_assessment = require_string(
+        expectation.get("assessment"), f"{field}.expectation_gap.assessment"
+    )
+    if expectation_assessment not in EXPECTATION_ASSESSMENTS:
+        raise ContractError(
+            f"{field}.expectation_gap.assessment must be one of "
+            f"{sorted(EXPECTATION_ASSESSMENTS)}"
+        )
+    baseline = require_string(expectation.get("baseline"), f"{field}.expectation_gap.baseline")
+    if baseline not in EXPECTATION_BASELINES:
+        raise ContractError(
+            f"{field}.expectation_gap.baseline must be one of {sorted(EXPECTATION_BASELINES)}"
+        )
+    require_string(expectation.get("reason"), f"{field}.expectation_gap.reason")
+    _validate_refs(
+        expectation.get("evidence_refs"),
+        f"{field}.expectation_gap.evidence_refs",
+        evidence_by_id,
+    )
+
+    pricing = require_mapping(profile.get("market_pricing"), f"{field}.market_pricing")
+    pricing_assessment = require_string(
+        pricing.get("assessment"), f"{field}.market_pricing.assessment"
+    )
+    if pricing_assessment not in MARKET_PRICING_ASSESSMENTS:
+        raise ContractError(
+            f"{field}.market_pricing.assessment must be one of "
+            f"{sorted(MARKET_PRICING_ASSESSMENTS)}"
+        )
+    require_string(pricing.get("reason"), f"{field}.market_pricing.reason")
+    _validate_refs(
+        pricing.get("evidence_refs"),
+        f"{field}.market_pricing.evidence_refs",
+        evidence_by_id,
+    )
+
+    catalyst = require_mapping(profile.get("next_catalyst"), f"{field}.next_catalyst")
+    require_string(catalyst.get("description"), f"{field}.next_catalyst.description")
+    scheduled_at = catalyst.get("scheduled_at")
+    if scheduled_at is not None:
+        parse_datetime(scheduled_at, f"{field}.next_catalyst.scheduled_at")
+    require_string(
+        catalyst.get("verification_rule"), f"{field}.next_catalyst.verification_rule"
+    )
+    _validate_refs(
+        catalyst.get("evidence_refs"),
+        f"{field}.next_catalyst.evidence_refs",
+        evidence_by_id,
+    )
+
+
+def _validate_magnitude(raw: Any, field: str) -> None:
+    # Missing magnitude remains valid for immutable V1/V2 snapshots but earns no economic-impact
+    # points in the current method. New schema-conforming snapshots make the object explicit.
+    if raw is None:
+        return
+    magnitude = require_mapping(raw, field)
+    status = require_string(magnitude.get("status"), f"{field}.status")
+    if status not in MAGNITUDE_STATUSES:
+        raise ContractError(f"{field}.status must be one of {sorted(MAGNITUDE_STATUSES)}")
+    basis = require_string(magnitude.get("basis"), f"{field}.basis")
+    if basis not in MAGNITUDE_BASES:
+        raise ContractError(f"{field}.basis must be one of {sorted(MAGNITUDE_BASES)}")
+    require_string(magnitude.get("formula"), f"{field}.formula")
+    values = {
+        name: _optional_decimal(magnitude.get(name), f"{field}.{name}")
+        for name in ("numerator", "denominator", "ratio")
+    }
+    present = {name for name, value in values.items() if value is not None}
+    if status == "quantified":
+        if present != {"numerator", "denominator", "ratio"}:
+            raise ContractError(f"{field} quantified status requires all numeric fields")
+        denominator = values["denominator"]
+        if denominator == 0:
+            raise ContractError(f"{field}.denominator must not be zero")
+        expected = values["numerator"] / denominator
+        tolerance = max(Decimal("0.000001"), abs(expected) * Decimal("0.000001"))
+        if abs(values["ratio"] - expected) > tolerance:
+            raise ContractError(f"{field}.ratio does not match numerator / denominator")
+    elif status == "partial":
+        if not present or present == {"numerator", "denominator", "ratio"}:
+            raise ContractError(f"{field} partial status requires some, but not all, numeric fields")
+    elif present:
+        raise ContractError(f"{field} unknown status requires null numeric fields")
+
+
+def _optional_decimal(raw: Any, field: str) -> Decimal | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        raise ContractError(f"{field} must be a finite decimal or null")
+    try:
+        value = Decimal(str(raw))
+    except InvalidOperation as exc:
+        raise ContractError(f"{field} must be a finite decimal or null") from exc
+    if not value.is_finite():
+        raise ContractError(f"{field} must be a finite decimal or null")
+    return value
+
+
+def _validate_impact_chain(
+    raw: Any,
+    field: str,
+    evidence_by_id: Mapping[str, Any],
+) -> None:
+    if raw is None:
+        return
+    chain = require_list(raw, field)
+    if len(chain) < 3:
+        raise ContractError(f"{field} must contain at least three candidate-level steps")
+    for index, raw_step in enumerate(chain):
+        step = require_mapping(raw_step, f"{field}[{index}]")
+        require_string(step.get("step"), f"{field}[{index}].step")
+        status = require_string(step.get("status"), f"{field}[{index}].status")
+        if status not in IMPACT_STATUSES:
+            raise ContractError(
+                f"{field}[{index}].status must be one of {sorted(IMPACT_STATUSES)}"
+            )
+        _validate_refs(
+            step.get("evidence_refs"),
+            f"{field}[{index}].evidence_refs",
+            evidence_by_id,
+        )
 
 
 def _latest_snapshot(workspace: Path) -> Path:

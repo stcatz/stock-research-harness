@@ -15,8 +15,14 @@
     <string>__PROVIDER__</string>
     <string>--dsh-bin</string>
     <string>__DSH_BIN__</string>
-    <string>--profile</string>
+    <string>--bear-profile</string>
+    <string>web</string>
+    <string>--judge-profile</string>
     <string>headless</string>
+    <string>--bear-model-id</string>
+    <string>UNKNOWN</string>
+    <string>--judge-model-id</string>
+    <string>UNKNOWN</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__ROOT__</string>

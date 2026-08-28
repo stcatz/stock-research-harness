@@ -132,7 +132,7 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 | SQLite | <code>data/stock_research.sqlite3</code> | <code>data/us_stock_research.sqlite3</code> |
 | artifacts | <code>artifacts/runs/&lt;run_id&gt;/</code> | <code>artifacts/us/runs/&lt;run_id&gt;/</code> |
 | 日报 | <code>reports/daily/</code> | <code>reports/us/daily/</code> |
-| DSH 工具 | <code>cn_research_run</code> / <code>cn_artifact_read</code> / <code>cn_outcome_history</code> | <code>us_research_run</code> / <code>us_artifact_read</code> / <code>us_outcome_history</code> |
+| DSH 工具 | <code>cn_research_run</code> / <code>cn_artifact_read</code> / <code>cn_outcome_history</code> / <code>cn_research_history</code> | <code>us_research_run</code> / <code>us_artifact_read</code> / <code>us_outcome_history</code> |
 
 两套引擎只共享仓库级规范，不共享运行时数据。不要把 A 股 snapshot 复制进美股目录，也不要在一个市场的请求里传入另一个市场的标的。
 
@@ -195,8 +195,8 @@ flowchart LR
 1. collector 获取真实数据并冻结 snapshot，离线引擎输出不可变报告。
 2. 独立反方只读取 <code>facts</code> 区段，看不到 thesis、counter thesis 或最终裁决；它可以联网寻找
    decision_at 前的一手反证。
-3. 另一次模型调用分页读取 report/packet、读取截至 decision_at 已可用的 outcome history，结合反方
-   JSON 生成非 canonical 机会备忘录和下一轮采集队列。
+3. 另一次模型调用分页读取 report/packet、读取截至 decision_at 已可用的 outcome history 和候选老化
+   历史，结合反方 JSON 输出强校验结构；确定性渲染器再生成非 canonical 机会备忘录和下一轮采集队列。
 
 每个候选同时具有：
 
@@ -587,7 +587,9 @@ A 股引擎关注：
 - 下一次可验证催化。
 - 反方证据、失效条件和人工复核项。
 
-方法卡见 [A 股题材方法](a_share_research/methods/a_share_theme_v1.toml)，日常流程见 [A 股工作流](a_share_research/WORKFLOW.md)。
+当前方法卡见 [A 股题材方法 V2](a_share_research/methods/a_share_theme_v2.toml)；
+[V1.1 方法卡](a_share_research/methods/a_share_theme_v1.toml) 只为旧 artifact 语义留存。日常流程见
+[A 股工作流](a_share_research/WORKFLOW.md)。
 
 ### 美股报告重点
 
@@ -631,12 +633,13 @@ DeepSeek Harness 适合做：
 
 ### 适配器暴露的工具
 
-| 市场 | 运行工具 | 读取工具 | 历史反馈工具 |
-|---|---|---|---|
-| A 股 | <code>cn_research_run</code> | <code>cn_artifact_read</code> | <code>cn_outcome_history</code> |
-| 美股 | <code>us_research_run</code> | <code>us_artifact_read</code> | <code>us_outcome_history</code> |
+| 市场 | 运行工具 | 读取工具 | 结果反馈 | 候选老化 |
+|---|---|---|---|---|
+| A 股 | <code>cn_research_run</code> | <code>cn_artifact_read</code> | <code>cn_outcome_history</code> | <code>cn_research_history</code> |
+| 美股 | <code>us_research_run</code> | <code>us_artifact_read</code> | <code>us_outcome_history</code> | — |
 
-每个适配器只注册三个业务级工具。它通过显式 argv 和单个 JSON stdin 调用对应 Python CLI，并把取消信号传给整个 Unix 子进程组。结果写入和底层数据库仍不暴露给模型。
+A 股适配器注册四个、美股适配器注册三个业务级工具。它们通过显式 argv 和单个 JSON stdin 调用对应
+Python CLI，并把取消信号传给整个 Unix 子进程组。结果写入和底层数据库仍不暴露给模型。
 
 ### 构建 A 股适配器
 
@@ -909,7 +912,7 @@ uv run a-share-research --workspace ~/ai/stock \
   --snapshot-id cn-20260818-hithink-v1
 ~~~
 
-该模式同时冻结候选/宽基不复权日线、全市场宽度、涨跌停与炸板池、最新估值和最近两个可对齐年度的三表字段。缺值保持 <code>UNKNOWN</code>；供应商题材原因不算官方证据；官方公告门槛仍由 seed 中的一级来源满足。成功响应只保存在仓库外的私有 raw audit store，snapshot 和报告仅保留哈希、request ID 和 opaque artifact ID。
+该模式同时冻结候选、上证/深证/创业板/中证 800 不复权日线、全市场宽度、涨跌停与炸板池、最新估值和最近两个可对齐年度的三表字段。缺值保持 <code>UNKNOWN</code>；供应商题材原因不算官方证据；官方公告门槛仍由 seed 中的一级来源满足。成功响应只保存在仓库外的私有 raw audit store，snapshot 和报告仅保留哈希、request ID 和 opaque artifact ID。
 
 美股采集器从 SEC submissions 与 companyfacts 获取 filing 元数据和可确定性解析的财务事实。它要求 SEC 合规的 <code>SEC_USER_AGENT</code>，不需要 API key；没有经过许可声明的行情 JSON 时，价格、估值和市场门槛保持 <code>UNKNOWN</code>，候选不会被冒充为可观察结论：
 
@@ -942,8 +945,8 @@ bash ~/ai/stock/scripts/run_us_validation.sh \
   --snapshot-id us-20260818-validation-v1
 ~~~
 
-显式联网的 A 股 Harness 会再执行一次 thesis-blind 反方调用和一次最终裁判/机会发现调用；canonical
-artifact 不被修改：
+显式联网的 A 股 Harness 会先用冻结快照自动结算精确 T+5/T+20，再执行一次 thesis-blind 反方调用
+和一次结构化最终裁判；canonical artifact 不被修改：
 
 ~~~bash
 bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
@@ -951,12 +954,20 @@ bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
   --provider hithink \
   --dsh-bin "$(command -v dsh)" \
-  --profile headless
+  --bear-profile skeptic \
+  --judge-profile headless \
+  --bear-model-id your-bear-model-version \
+  --judge-model-id your-judge-model-version
 ~~~
 
-输出保存在 <code>.runtime/harness/cn/&lt;snapshot_id&gt;/</code>：canonical receipt、drift receipt、
-独立反方 JSON 和最终机会备忘录彼此分开；<code>harness-manifest.json</code> 另行固定代码版本、prompt
-模板、模型角色边界和输出哈希，且不记录密钥。新发现线索在进入下一份冻结 snapshot 前只能保持
+反方与裁判 profile 必须不同；默认分别为 <code>web</code> 和 <code>headless</code>。声明的 model ID 只用于
+审计，实际模型仍由各自 DSH profile 决定，因此调度前应核对两个 profile 的 provider/model 配置。
+
+输出保存在 <code>.runtime/harness/cn/&lt;snapshot_id&gt;/</code>：canonical runner 回执、完整分页校验
+回执、drift、settlement、冻结的 outcome/research history、独立反方 JSON、最终裁判 JSON 和瘦身
+机会备忘录彼此分开；<code>harness-manifest.json</code> 固定代码版本、DSH 二进制哈希、两个 profile/
+声明模型版本、prompt 和原始/规范化输出哈希，且不记录密钥。
+新发现线索在进入下一份冻结 snapshot 前只能保持
 <code>continue_research / 尚未冻结</code>。
 
 ### 7. 每日调度
@@ -1213,7 +1224,7 @@ stock-research-harness/
 2. 在现有 SEC 采集器上增加发行人 IR、官方宏观与经过授权的行情 adapter。
 3. 用真实 forward snapshot 连续填充已实现的 T+5/T+20 sidecar，并按 regime 分层盲评。
 4. 增加行业分类和历史估值仓库，把当前明确为 UNKNOWN 的两个分位变成严格 PIT 计算。
-5. 加固 LaunchAgent 的失败告警、交易日历和 outcome 到期回填，同时保持 canonical run 可独立运行。
+5. 加固 LaunchAgent 的失败告警，并用更完整的停牌/特殊交易日测试扩展已实现的自动 outcome 到期回填。
 6. 在数据授权明确后增加 estimate vintage、transcript 或更多财务字段。
 
 明确不在路线图内：

@@ -4,8 +4,11 @@ import math
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping
+from datetime import datetime, time, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .contracts import (
     MARKET,
@@ -18,10 +21,14 @@ from .contracts import (
 )
 from .locking import run_lock
 from .storage import connect, database_path, initialize_workspace
-from .utils import sha256_value
+from .utils import read_json, sha256_file, sha256_value
+from .snapshot import validate_snapshot
+from ..ingest.market_data import normalize_cn_symbol
 
 ALLOWED_HORIZONS = {5, 20}
 BENCHMARK_SYMBOL = "000906.SH"
+CANONICAL_BENCHMARK_CODE = "sh.000906"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def record_outcome(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
@@ -250,6 +257,113 @@ def summarize_outcome_history(raw_request: Mapping[str, Any], workspace: Path) -
     }
 
 
+def settle_outcomes_from_snapshot(
+    raw_request: Mapping[str, Any], workspace: Path
+) -> dict[str, Any]:
+    """Settle exact T+5/T+20 close returns from an already frozen daily snapshot.
+
+    This function performs no network access.  It only records an observation when both the
+    original run snapshot and the settlement snapshot contain the required unadjusted closes and
+    the CSI 800 window identifies the exact Nth later exchange session.  Every other case remains
+    pending with a machine-readable reason.
+    """
+
+    data = require_mapping(raw_request, "request")
+    _reject_unknown(data, {"schema_version", "market", "snapshot_id", "evaluation_at"})
+    _validate_common(data)
+    snapshot_id = require_string(data.get("snapshot_id"), "snapshot_id")
+    evaluation_at = parse_datetime(data.get("evaluation_at"), "evaluation_at")
+    workspace = workspace.resolve()
+    initialize_workspace(workspace)
+    settlement_path = workspace / "data" / "normalized" / snapshot_id / "snapshot.json"
+    if not settlement_path.is_file():
+        raise KeyError(f"snapshot not found: {snapshot_id}")
+    settlement = validate_snapshot(read_json(settlement_path))
+    if parse_datetime(settlement.data["retrieved_at"], "snapshot.retrieved_at") > evaluation_at:
+        raise ContractError("settlement snapshot was not available by evaluation_at")
+    settlement_windows = _market_windows(settlement.data)
+
+    with connect(database_path(workspace)) as connection:
+        rows = connection.execute(
+            """
+            SELECT r.run_id, r.decision_at, a.run_dir, c.candidate_id, c.symbol,
+                   c.decision
+            FROM candidate_decisions AS c
+            JOIN runs AS r ON r.run_id = c.run_id
+            JOIN artifacts AS a ON a.run_id = r.run_id
+            ORDER BY r.decision_at, r.run_id, c.candidate_id
+            """
+        ).fetchall()
+        existing = {
+            (row["run_id"], row["candidate_id"], row["horizon_trading_days"])
+            for row in connection.execute(
+                """
+                SELECT run_id, candidate_id, horizon_trading_days
+                FROM decision_outcomes
+                """
+            ).fetchall()
+        }
+
+    original_cache: dict[str, dict[str, Any]] = {}
+    recorded: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    existing_count = 0
+    decision_cutoff = evaluation_at - timedelta(days=90)
+    eligible_rows: list[Any] = []
+    expired_count = 0
+    for row in rows:
+        decision_time = parse_datetime(row["decision_at"], "runs.decision_at")
+        if decision_time >= evaluation_at:
+            continue
+        if decision_time < decision_cutoff:
+            expired_count += sum(
+                (row["run_id"], row["candidate_id"], horizon) not in existing
+                for horizon in ALLOWED_HORIZONS
+            )
+            continue
+        eligible_rows.append(row)
+    for row in eligible_rows:
+        run_id = row["run_id"]
+        if run_id not in original_cache:
+            original_cache[run_id] = _verified_run_snapshot(workspace, row["run_dir"])
+        original_windows = _market_windows(original_cache[run_id])
+        for horizon in sorted(ALLOWED_HORIZONS):
+            slot = (run_id, row["candidate_id"], horizon)
+            if slot in existing:
+                existing_count += 1
+                continue
+            result = _settlement_observation(
+                row,
+                horizon,
+                original_windows,
+                settlement_windows,
+                snapshot_id,
+            )
+            if "pending_reason" in result:
+                pending.append(result)
+                continue
+            observation = record_outcome(result, workspace)
+            recorded.append(observation)
+            existing.add(slot)
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "market": MARKET,
+        "snapshot_id": snapshot_id,
+        "evaluation_at": evaluation_at.isoformat(),
+        "metric": "benchmark_relative_unadjusted_close_return",
+        "benchmark_symbol": BENCHMARK_SYMBOL,
+        "recorded_count": len(recorded),
+        "pending_count": len(pending),
+        "expired_unsettled_count": expired_count,
+        "existing_count": existing_count,
+        "recorded": recorded,
+        "pending": pending,
+        "status": "completed" if not pending else "partial",
+        "network_accessed": False,
+    }
+
+
 def _scorecards(rows: Any) -> list[dict[str, Any]]:
     grouped: dict[tuple[int, str], list[float]] = defaultdict(list)
     for row in rows:
@@ -271,6 +385,144 @@ def _scorecards(rows: Any) -> list[dict[str, Any]]:
                 }
             )
     return result
+
+
+def _settlement_observation(
+    row: Any,
+    horizon: int,
+    original_windows: dict[str, dict[str, Any]],
+    settlement_windows: dict[str, dict[str, Any]],
+    snapshot_id: str,
+) -> dict[str, Any]:
+    base = {
+        "schema_version": SCHEMA_VERSION,
+        "market": MARKET,
+        "run_id": row["run_id"],
+        "candidate_id": row["candidate_id"],
+        "symbol": row["symbol"],
+        "horizon_trading_days": horizon,
+    }
+    try:
+        candidate_code = normalize_cn_symbol(row["symbol"])
+    except ValueError:
+        return {**base, "pending_reason": "unsupported_candidate_symbol"}
+    original_candidate = original_windows.get(candidate_code)
+    original_benchmark = original_windows.get(CANONICAL_BENCHMARK_CODE)
+    current_candidate = settlement_windows.get(candidate_code)
+    current_benchmark = settlement_windows.get(CANONICAL_BENCHMARK_CODE)
+    if original_candidate is None or original_benchmark is None:
+        return {**base, "pending_reason": "original_snapshot_missing_candidate_or_csi800"}
+    if current_candidate is None or current_benchmark is None:
+        return {**base, "pending_reason": "settlement_snapshot_missing_candidate_or_csi800"}
+
+    candidate_base = _latest_bar(original_candidate)
+    benchmark_base = _latest_bar(original_benchmark)
+    if candidate_base is None or benchmark_base is None:
+        return {**base, "pending_reason": "original_snapshot_missing_base_close"}
+    if candidate_base["date"] != benchmark_base["date"]:
+        return {**base, "pending_reason": "candidate_and_benchmark_base_sessions_differ"}
+    base_date = candidate_base["date"]
+    benchmark_after = sorted(
+        date_value
+        for date_value in current_benchmark["bars"]
+        if date_value > base_date
+    )
+    if len(benchmark_after) < horizon:
+        return {
+            **base,
+            "pending_reason": "insufficient_later_benchmark_sessions",
+            "available_later_sessions": len(benchmark_after),
+        }
+    target_date = benchmark_after[horizon - 1]
+    candidate_target = current_candidate["bars"].get(target_date)
+    benchmark_target = current_benchmark["bars"].get(target_date)
+    if candidate_target is None:
+        return {
+            **base,
+            "pending_reason": "candidate_close_missing_on_target_session",
+            "target_session": target_date,
+        }
+    if benchmark_target is None:  # defensive: target came from this exact map
+        return {**base, "pending_reason": "benchmark_close_missing_on_target_session"}
+    candidate_return = _close_return(candidate_base["close"], candidate_target)
+    benchmark_return = _close_return(benchmark_base["close"], benchmark_target)
+    observed_at = datetime.combine(
+        datetime.fromisoformat(target_date).date(), time(15, 0), tzinfo=SHANGHAI_TZ
+    )
+    available_at = max(current_candidate["available_at"], current_benchmark["available_at"])
+    return {
+        **base,
+        "observed_at": observed_at.isoformat(),
+        "available_at": available_at.isoformat(),
+        "candidate_return": candidate_return,
+        "benchmark_return": benchmark_return,
+        "benchmark_symbol": BENCHMARK_SYMBOL,
+        "source_url": current_candidate["source_url"],
+        "source_document_id": (
+            f"{snapshot_id}:{current_candidate['evidence_id']}:"
+            f"{current_benchmark['evidence_id']}:{target_date}"
+        ),
+    }
+
+
+def _market_windows(snapshot: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    windows: dict[str, dict[str, Any]] = {}
+    for evidence in snapshot.get("evidence", []):
+        if evidence.get("source_level") != "structured_market":
+            continue
+        instrument = evidence.get("instrument")
+        calculation_window = evidence.get("calculation_window")
+        if not isinstance(instrument, Mapping) or not isinstance(calculation_window, list):
+            continue
+        code = instrument.get("code")
+        if not isinstance(code, str):
+            continue
+        bars: dict[str, Decimal] = {}
+        for raw_bar in calculation_window:
+            if not isinstance(raw_bar, Mapping):
+                continue
+            date_value = raw_bar.get("date")
+            try:
+                close = Decimal(str(raw_bar.get("close")))
+            except (InvalidOperation, ValueError):
+                continue
+            if isinstance(date_value, str) and close > 0:
+                bars[date_value] = close
+        windows[code] = {
+            "evidence_id": evidence["evidence_id"],
+            "source_url": evidence["source_url"],
+            "available_at": parse_datetime(evidence["available_at"], "evidence.available_at"),
+            "bars": bars,
+        }
+    return windows
+
+
+def _latest_bar(window: dict[str, Any]) -> dict[str, Any] | None:
+    if not window["bars"]:
+        return None
+    date_value = max(window["bars"])
+    return {"date": date_value, "close": window["bars"][date_value]}
+
+
+def _close_return(base: Decimal, target: Decimal) -> float:
+    if base <= 0 or target <= 0:
+        raise ContractError("close values must be positive for outcome settlement")
+    return float((target / base) - Decimal(1))
+
+
+def _verified_run_snapshot(workspace: Path, relative_run_dir: str) -> dict[str, Any]:
+    run_dir = (workspace / relative_run_dir).resolve()
+    artifact_root = (workspace / "artifacts" / "runs").resolve()
+    try:
+        run_dir.relative_to(artifact_root)
+    except ValueError as exc:
+        raise RuntimeError("stored run directory escaped the artifact store") from exc
+    manifest = read_json(run_dir / "manifest.json")
+    snapshot_path = run_dir / "snapshot.json"
+    expected_hash = manifest.get("files", {}).get("snapshot.json")
+    if not isinstance(expected_hash, str) or sha256_file(snapshot_path) != expected_hash:
+        raise RuntimeError("immutable run snapshot hash mismatch during outcome settlement")
+    return validate_snapshot(read_json(snapshot_path)).data
 
 
 def _available_rows(rows: Any, evaluation_at: Any) -> list[Any]:

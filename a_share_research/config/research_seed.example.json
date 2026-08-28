@@ -98,6 +98,60 @@
           "role": "core",
           "thesis": "仅演示字段结构，不代表该代码对应公司的真实研究结论。",
           "counter_thesis": "没有真实证据，不应形成任何投资判断。",
+          "opportunity_profile": {
+            "new_information": {
+              "assessment": "unknown",
+              "reason": "合成示例没有真实新增信息。",
+              "evidence_refs": ["EXAMPLE-POLICY-001"]
+            },
+            "economic_impact": {
+              "assessment": "unknown",
+              "reason": "合成示例缺少可核验的金额、收入和利润分母。",
+              "evidence_refs": ["EXAMPLE-COMPANY-001"],
+              "magnitude": {
+                "status": "unknown",
+                "basis": "unknown",
+                "numerator": null,
+                "denominator": null,
+                "ratio": null,
+                "formula": "UNKNOWN"
+              }
+            },
+            "expectation_gap": {
+              "assessment": "unknown",
+              "baseline": "none",
+              "reason": "合成示例没有一致预期、管理层指引或历史基线。",
+              "evidence_refs": []
+            },
+            "market_pricing": {
+              "assessment": "unknown",
+              "reason": "结构化行情由 collect-snapshot 自动加入，seed 不得预填。",
+              "evidence_refs": []
+            },
+            "next_catalyst": {
+              "description": "合成示例占位日期，正式使用时必须替换",
+              "scheduled_at": "2099-01-01T09:00:00+08:00",
+              "verification_rule": "核验正式来源是否明确给出该日期及可观察事项。",
+              "evidence_refs": ["EXAMPLE-POLICY-001"]
+            }
+          },
+          "impact_chain": [
+            {
+              "step": "正式事件改变产业约束",
+              "status": "unknown",
+              "evidence_refs": ["EXAMPLE-POLICY-001"]
+            },
+            {
+              "step": "产业量价变化映射公司订单或成本",
+              "status": "unknown",
+              "evidence_refs": ["EXAMPLE-COMPANY-001"]
+            },
+            {
+              "step": "订单或成本变化进入收入、利润或现金流",
+              "status": "unknown",
+              "evidence_refs": ["EXAMPLE-COMPANY-001"]
+            }
+          ],
           "evidence_refs": [
             "EXAMPLE-COMPANY-001"
           ],

@@ -10,8 +10,14 @@ from typing import Any
 
 from .core.contracts import SCHEMA_VERSION, ContractError
 from .core.drift import audit_snapshot_drift
-from .core.outcomes import record_outcome, summarize_outcome_history, summarize_outcomes
+from .core.outcomes import (
+    record_outcome,
+    settle_outcomes_from_snapshot,
+    summarize_outcome_history,
+    summarize_outcomes,
+)
 from .core.pipeline import doctor, read_artifact, run_research
+from .core.research_history import summarize_research_history
 from .core.storage import initialize_workspace
 from .ingest import collect_cn_snapshot, probe_hithink_provider
 
@@ -48,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("outcome-record", "Append one immutable future outcome observation"),
         ("outcome-summary", "Summarize only outcomes available by evaluation_at"),
         ("outcome-history", "Read prior outcome scorecards available by evaluation_at"),
+        ("outcome-settle-snapshot", "Settle exact due horizons from a frozen snapshot"),
+        ("research-history", "Read candidate state aging without rewriting prior runs"),
     ):
         outcome_parser = subparsers.add_parser(command, help=help_text)
         outcome_parser.add_argument(
@@ -134,6 +142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = summarize_outcomes(_read_json(args.request_json), workspace)
         elif args.command == "outcome-history":
             result = summarize_outcome_history(_read_json(args.request_json), workspace)
+        elif args.command == "outcome-settle-snapshot":
+            result = settle_outcomes_from_snapshot(_read_json(args.request_json), workspace)
+        elif args.command == "research-history":
+            result = summarize_research_history(_read_json(args.request_json), workspace)
         elif args.command == "audit-drift":
             result = audit_snapshot_drift(_read_json(args.request_json), workspace)
         elif args.command == "collect-snapshot":
