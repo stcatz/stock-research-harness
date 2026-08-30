@@ -17,19 +17,26 @@ Required:
 Options:
   --provider NAME        baostock or hithink (default: hithink)
   --raw-store-root PATH  Private HiThink raw-response store
+  --official-raw-store-root PATH
+                         Private immutable official-document store
   --snapshot-id ID       Immutable snapshot ID (default: generated locally)
   --decision-at ISO      Timezone-aware cut-off after collection
   --top-n N              Focus candidate count, 1-20 (default: 9)
   --dsh-bin PATH         DeepSeek Harness executable (default: dsh from PATH)
   --profile NAME         Legacy alias for --judge-profile
+  --discovery-profile NAME
+                         Official-source coordinate discovery profile (default: web)
   --bear-profile NAME    Thesis-blind bear profile (default: web)
   --judge-profile NAME   Final-judge profile (default: headless)
+  --discovery-model-id ID
+                         Auditable model label for source discovery (default: UNKNOWN)
   --bear-model-id ID     Auditable model label for the bear profile (default: UNKNOWN)
   --judge-model-id ID    Auditable model label for the judge profile (default: UNKNOWN)
   -h, --help             Show this help
 
-This is an explicitly networked two-profile Harness. It first runs the canonical collector and
-offline engine, then performs a thesis-blind bear review and a separate final web investigation.
+This is an explicitly networked Harness. A model first proposes only official source coordinates;
+Python then downloads and verifies original bytes and creates candidates only for directly named
+issuers. The frozen canonical engine is followed by a thesis-blind bear and a separate final judge.
 It never edits canonical artifacts or invokes any broker/order capability.
 EOF
 }
@@ -45,12 +52,15 @@ ROOT_ARGUMENT=
 SEED_ARGUMENT=
 PROVIDER=hithink
 RAW_STORE_ARGUMENT=
+OFFICIAL_RAW_STORE_ARGUMENT=
 SNAPSHOT_ID=
 DECISION_AT=
 TOP_N=9
 DSH_ARGUMENT=
+DISCOVERY_PROFILE=web
 BEAR_PROFILE=web
 JUDGE_PROFILE=headless
+DISCOVERY_MODEL_ID=UNKNOWN
 BEAR_MODEL_ID=UNKNOWN
 JUDGE_MODEL_ID=UNKNOWN
 
@@ -60,13 +70,16 @@ while [ "$#" -gt 0 ]; do
     --seed-json) [ "$#" -ge 2 ] || die "--seed-json requires a value"; SEED_ARGUMENT=$2; shift 2 ;;
     --provider) [ "$#" -ge 2 ] || die "--provider requires a value"; PROVIDER=$2; shift 2 ;;
     --raw-store-root) [ "$#" -ge 2 ] || die "--raw-store-root requires a value"; RAW_STORE_ARGUMENT=$2; shift 2 ;;
+    --official-raw-store-root) [ "$#" -ge 2 ] || die "--official-raw-store-root requires a value"; OFFICIAL_RAW_STORE_ARGUMENT=$2; shift 2 ;;
     --snapshot-id) [ "$#" -ge 2 ] || die "--snapshot-id requires a value"; SNAPSHOT_ID=$2; shift 2 ;;
     --decision-at) [ "$#" -ge 2 ] || die "--decision-at requires a value"; DECISION_AT=$2; shift 2 ;;
     --top-n) [ "$#" -ge 2 ] || die "--top-n requires a value"; TOP_N=$2; shift 2 ;;
     --dsh-bin) [ "$#" -ge 2 ] || die "--dsh-bin requires a value"; DSH_ARGUMENT=$2; shift 2 ;;
     --profile) [ "$#" -ge 2 ] || die "--profile requires a value"; JUDGE_PROFILE=$2; shift 2 ;;
+    --discovery-profile) [ "$#" -ge 2 ] || die "--discovery-profile requires a value"; DISCOVERY_PROFILE=$2; shift 2 ;;
     --bear-profile) [ "$#" -ge 2 ] || die "--bear-profile requires a value"; BEAR_PROFILE=$2; shift 2 ;;
     --judge-profile) [ "$#" -ge 2 ] || die "--judge-profile requires a value"; JUDGE_PROFILE=$2; shift 2 ;;
+    --discovery-model-id) [ "$#" -ge 2 ] || die "--discovery-model-id requires a value"; DISCOVERY_MODEL_ID=$2; shift 2 ;;
     --bear-model-id) [ "$#" -ge 2 ] || die "--bear-model-id requires a value"; BEAR_MODEL_ID=$2; shift 2 ;;
     --judge-model-id) [ "$#" -ge 2 ] || die "--judge-model-id requires a value"; JUDGE_MODEL_ID=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -87,10 +100,12 @@ PYTHON="$ROOT/a_share_research/.venv/bin/python"
 CANONICAL_RUNNER="$ROOT/scripts/run_cn_daily.sh"
 BEAR_TEMPLATE="$ROOT/a_share_research/prompts/harness-independent-bear.md"
 FINAL_TEMPLATE="$ROOT/a_share_research/prompts/harness-daily-opportunity.md"
+DISCOVERY_TEMPLATE="$ROOT/a_share_research/prompts/harness-official-discovery.md"
 [ -x "$PYTHON" ] || die "A-share project Python is missing; run uv sync first"
 [ -x "$CANONICAL_RUNNER" ] || die "scripts/run_cn_daily.sh is missing or not executable"
 [ -f "$BEAR_TEMPLATE" ] || die "independent bear prompt is missing"
 [ -f "$FINAL_TEMPLATE" ] || die "daily Harness prompt is missing"
+[ -f "$DISCOVERY_TEMPLATE" ] || die "official discovery prompt is missing"
 
 if [ -n "$DSH_ARGUMENT" ]; then
   DSH_BIN=$DSH_ARGUMENT
@@ -98,12 +113,12 @@ else
   DSH_BIN=$(command -v dsh 2>/dev/null || true)
 fi
 [ -n "$DSH_BIN" ] && [ -x "$DSH_BIN" ] || die "DeepSeek Harness executable was not found"
-for PROFILE_VALUE in "$BEAR_PROFILE" "$JUDGE_PROFILE"; do
+for PROFILE_VALUE in "$DISCOVERY_PROFILE" "$BEAR_PROFILE" "$JUDGE_PROFILE"; do
   case "$PROFILE_VALUE" in ''|*[!A-Za-z0-9._-]*) die "DSH profile contains unsupported characters" ;; esac
 done
 [ "$BEAR_PROFILE" != "$JUDGE_PROFILE" ] || \
   die "bear and judge profiles must differ to preserve review independence"
-for MODEL_VALUE in "$BEAR_MODEL_ID" "$JUDGE_MODEL_ID"; do
+for MODEL_VALUE in "$DISCOVERY_MODEL_ID" "$BEAR_MODEL_ID" "$JUDGE_MODEL_ID"; do
   case "$MODEL_VALUE" in ''|*[!A-Za-z0-9._:/@+-]*) die "model ID contains unsupported characters" ;; esac
 done
 if [ "$BEAR_MODEL_ID" != "UNKNOWN" ] && [ "$BEAR_MODEL_ID" = "$JUDGE_MODEL_ID" ]; then
@@ -172,9 +187,99 @@ for path in root.glob("*/harness-manifest.json"):
 print(max(candidates)[1] if candidates else "")' "$ROOT"
 )
 
+PREVIOUS_DECISION_AT=$(
+  "$PYTHON" -c 'import json
+from pathlib import Path
+import sys
+
+if not sys.argv[2]:
+    print("")
+    raise SystemExit(0)
+manifest = Path(sys.argv[1]) / ".runtime" / "harness" / "cn" / sys.argv[2] / "harness-manifest.json"
+try:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    value = payload.get("decision_at", "")
+    print(value if isinstance(value, str) else "")
+except (OSError, json.JSONDecodeError):
+    print("")' "$ROOT" "$PREVIOUS_SNAPSHOT_ID"
+)
+
+DISCOVERY_BOUNDARIES=$(
+  "$PYTHON" -c 'from datetime import datetime, timedelta
+import json
+import sys
+from zoneinfo import ZoneInfo
+
+zone = ZoneInfo("Asia/Shanghai")
+now = datetime.now(zone)
+end = datetime.fromisoformat(sys.argv[2]) if sys.argv[2] else now
+if end.tzinfo is None or end.utcoffset() is None:
+    raise SystemExit("decision_at must include a timezone")
+try:
+    previous = datetime.fromisoformat(sys.argv[1]) if sys.argv[1] else None
+except ValueError:
+    previous = None
+if previous is not None and (previous.tzinfo is None or previous.utcoffset() is None):
+    previous = None
+start = previous if previous is not None and previous < end else end - timedelta(hours=72)
+if end - start > timedelta(days=7):
+    start = end - timedelta(days=7)
+print(json.dumps({"start": start.isoformat(), "end": end.isoformat()}))' \
+    "$PREVIOUS_DECISION_AT" "$DECISION_AT"
+) || die "could not calculate the official discovery window"
+DISCOVERY_WINDOW_START=$(printf '%s' "$DISCOVERY_BOUNDARIES" | "$PYTHON" -c 'import json, sys; print(json.load(sys.stdin)["start"])')
+DISCOVERY_WINDOW_END=$(printf '%s' "$DISCOVERY_BOUNDARIES" | "$PYTHON" -c 'import json, sys; print(json.load(sys.stdin)["end"])')
+
+render_prompt() {
+  "$PYTHON" -c 'from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+for index in range(2, len(sys.argv), 2):
+    text = text.replace(sys.argv[index], sys.argv[index + 1])
+print(text, end="")' "$@"
+}
+
+render_prompt "$DISCOVERY_TEMPLATE" \
+  __WINDOW_START__ "$DISCOVERY_WINDOW_START" \
+  __WINDOW_END__ "$DISCOVERY_WINDOW_END" >"$TMP_DIR/discovery.prompt"
+printf 'run_cn_harness_daily: discovering official source coordinates only\n' >&2
+DISCOVERY_PROMPT=$("$PYTHON" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text(encoding="utf-8"), end="")' "$TMP_DIR/discovery.prompt")
+if ! env -u HITHINK_FINANCE_API_KEY "$DSH_BIN" --profile "$DISCOVERY_PROFILE" "$DISCOVERY_PROMPT" \
+    >"$TMP_DIR/discovery.out"; then
+  die "official source discovery Harness call failed"
+fi
+if ! env PYTHONPATH="$ROOT/a_share_research/src" \
+    "$PYTHON" -m a_share_research.cli --workspace "$ROOT" \
+    official-discovery-normalize \
+    --input "$TMP_DIR/discovery.out" \
+    --output "$TMP_DIR/official-discovery.json" \
+    --window-start "$DISCOVERY_WINDOW_START" \
+    --window-end "$DISCOVERY_WINDOW_END" \
+    >"$TMP_DIR/discovery-normalize-receipt.json"; then
+  die "official source discovery output did not satisfy the coordinate contract"
+fi
+
+OFFICIAL_COLLECTION_ARGUMENTS=(
+  --workspace "$ROOT"
+  collect-official-evidence
+  --seed-json "$SEED_JSON"
+  --discovery-json "$TMP_DIR/official-discovery.json"
+  --output-seed-json "$TMP_DIR/compiled-seed.json"
+)
+if [ -n "$OFFICIAL_RAW_STORE_ARGUMENT" ]; then
+  OFFICIAL_COLLECTION_ARGUMENTS+=(--official-raw-store-root "$OFFICIAL_RAW_STORE_ARGUMENT")
+fi
+printf 'run_cn_harness_daily: downloading and verifying proposed official documents\n' >&2
+if ! env PYTHONPATH="$ROOT/a_share_research/src" \
+    "$PYTHON" -m a_share_research.cli "${OFFICIAL_COLLECTION_ARGUMENTS[@]}" \
+    >"$TMP_DIR/official-collection.json"; then
+  die "official evidence verification and seed compilation failed"
+fi
+
 CANONICAL_ARGUMENTS=(
   --root "$ROOT"
-  --seed-json "$SEED_JSON"
+  --seed-json "$TMP_DIR/compiled-seed.json"
   --provider "$PROVIDER"
   --snapshot-id "$SNAPSHOT_ID"
   --top-n "$TOP_N"
@@ -356,16 +461,6 @@ print(json.dumps({
   die "could not freeze candidate history for final validation"
 fi
 
-render_prompt() {
-  "$PYTHON" -c 'from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-for index in range(2, len(sys.argv), 2):
-    text = text.replace(sys.argv[index], sys.argv[index + 1])
-print(text, end="")' "$@"
-}
-
 render_prompt "$BEAR_TEMPLATE" \
   __ARTIFACT_ID__ "$ARTIFACT_ID" \
   __DECISION_AT__ "$DECISION_AT" \
@@ -392,11 +487,16 @@ BEAR_JSON_STRING=$("$PYTHON" -c 'import json
 from pathlib import Path
 import sys
 print(json.dumps(Path(sys.argv[1]).read_text(encoding="utf-8"), ensure_ascii=False))' "$TMP_DIR/bear.json")
+OFFICIAL_COLLECTION_JSON_STRING=$("$PYTHON" -c 'import json
+from pathlib import Path
+import sys
+print(json.dumps(Path(sys.argv[1]).read_text(encoding="utf-8"), ensure_ascii=False))' "$TMP_DIR/official-collection.json")
 render_prompt "$FINAL_TEMPLATE" \
   __ARTIFACT_ID__ "$ARTIFACT_ID" \
   __SNAPSHOT_ID__ "$SNAPSHOT_ID" \
   __DECISION_AT__ "$DECISION_AT" \
   __DRIFT_STATUS__ "$DRIFT_STATUS" \
+  __OFFICIAL_COLLECTION_JSON_STRING__ "$OFFICIAL_COLLECTION_JSON_STRING" \
   __BEAR_REVIEW_JSON_STRING__ "$BEAR_JSON_STRING" >"$TMP_DIR/final.prompt"
 
 printf 'run_cn_harness_daily: running final online judge and opportunity discovery\n' >&2
@@ -454,6 +554,8 @@ mv "$TMP_DIR/drift.json" "$STAGING_OUTPUT/drift.json"
 mv "$TMP_DIR/settlement.json" "$STAGING_OUTPUT/settlement.json"
 mv "$TMP_DIR/outcome-history.json" "$STAGING_OUTPUT/outcome-history.json"
 mv "$TMP_DIR/research-history.json" "$STAGING_OUTPUT/research-history.json"
+mv "$TMP_DIR/official-discovery.json" "$STAGING_OUTPUT/official-discovery.json"
+mv "$TMP_DIR/official-collection.json" "$STAGING_OUTPUT/official-collection.json"
 mv "$TMP_DIR/bear.json" "$STAGING_OUTPUT/independent-bear.json"
 mv "$TMP_DIR/final-judgment.json" "$STAGING_OUTPUT/final-judgment.json"
 mv "$TMP_DIR/memo.md" "$STAGING_OUTPUT/opportunity-memo.md"
@@ -482,6 +584,8 @@ final_template = Path(sys.argv[13])
 dsh_binary = Path(sys.argv[15])
 bear_raw = Path(sys.argv[16])
 final_raw = Path(sys.argv[17])
+discovery_template = Path(sys.argv[18])
+discovery_raw = Path(sys.argv[21])
 
 def digest(path):
     return sha256(path.read_bytes()).hexdigest()
@@ -496,6 +600,8 @@ files = {
         "settlement.json",
         "outcome-history.json",
         "research-history.json",
+        "official-discovery.json",
+        "official-collection.json",
         "independent-bear.json",
         "final-judgment.json",
         "opportunity-memo.md",
@@ -504,7 +610,7 @@ files = {
 stable = {
     "schema_version": "0.1",
     "market": "CN",
-    "harness_contract_version": "0.2",
+    "harness_contract_version": "0.3",
     "snapshot_id": sys.argv[3],
     "artifact_id": sys.argv[4],
     "decision_at": sys.argv[5],
@@ -512,6 +618,7 @@ stable = {
     "dsh": {
         "binary_name": dsh_binary.name,
         "binary_sha256": digest(dsh_binary),
+        "discovery_profile": sys.argv[20],
         "bear_profile": sys.argv[7],
         "judge_profile": sys.argv[8],
         "review_profiles_distinct": sys.argv[7] != sys.argv[8],
@@ -525,12 +632,26 @@ stable = {
     "code_worktree_dirty": {"true": True, "false": False}.get(sys.argv[14]),
     "network_boundary": {
         "collector_networked": True,
+        "official_source_discovery_networked": True,
+        "official_documents_downloaded_by_python": True,
+        "model_output_accepted_as_fact": False,
+        "policy_to_company_mapping_automated": False,
         "canonical_engine_networked": False,
         "review_calls_networked": True,
         "provider_credentials_forwarded_to_models": False,
         "canonical_artifact_rewritten": False,
     },
     "model_calls": [
+        {
+            "role": "official_source_discovery",
+            "declared_model_id": sys.argv[19],
+            "profile": sys.argv[20],
+            "input_scope": "official_urls_titles_dates_and_literal_issuer_quotes_only",
+            "thesis_generation_allowed": False,
+            "raw_output_sha256": digest(discovery_raw),
+            "normalized_output_sha256": files["official-discovery.json"],
+            "collection_receipt_sha256": files["official-collection.json"],
+        },
         {
             "role": "independent_bear",
             "declared_model_id": sys.argv[9],
@@ -550,6 +671,7 @@ stable = {
         },
     ],
     "prompt_templates": {
+        discovery_template.relative_to(root).as_posix(): digest(discovery_template),
         bear_template.relative_to(root).as_posix(): digest(bear_template),
         final_template.relative_to(root).as_posix(): digest(final_template),
     },
@@ -569,7 +691,8 @@ manifest = {
   "$ROOT" "$STAGING_OUTPUT" "$SNAPSHOT_ID" "$ARTIFACT_ID" "$DECISION_AT" "$DRIFT_STATUS" \
   "$BEAR_PROFILE" "$JUDGE_PROFILE" "$BEAR_MODEL_ID" "$JUDGE_MODEL_ID" \
   "$CODE_REVISION" "$BEAR_TEMPLATE" "$FINAL_TEMPLATE" "$CODE_DIRTY" "$DSH_BIN" \
-  "$TMP_DIR/bear.out" "$TMP_DIR/final.out"
+  "$TMP_DIR/bear.out" "$TMP_DIR/final.out" "$DISCOVERY_TEMPLATE" \
+  "$DISCOVERY_MODEL_ID" "$DISCOVERY_PROFILE" "$TMP_DIR/discovery.out"
 chmod 600 "$STAGING_OUTPUT"/*
 "$PYTHON" -c 'import os
 from pathlib import Path
@@ -593,6 +716,7 @@ import sys
 
 root = Path(sys.argv[1])
 output = Path(sys.argv[2])
+official = json.loads((output / "official-collection.json").read_text(encoding="utf-8"))
 print(json.dumps({
     "schema_version": "0.1",
     "market": "CN",
@@ -602,6 +726,13 @@ print(json.dumps({
     "artifact_id": sys.argv[4],
     "decision_at": sys.argv[5],
     "drift_status": sys.argv[6],
+    "official_evidence": {
+        "proposed": official["proposed_source_count"],
+        "accepted": official["accepted_source_count"],
+        "rejected": official["rejected_source_count"],
+        "generated_candidates": official["generated_candidate_count"],
+        "policy_leads": official["policy_lead_count"],
+    },
     "output_dir": output.relative_to(root).as_posix(),
     "memo_path": (output / "opportunity-memo.md").relative_to(root).as_posix(),
     "harness_manifest_path": (output / "harness-manifest.json").relative_to(root).as_posix(),

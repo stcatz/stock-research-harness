@@ -9,6 +9,7 @@ dependencies = []
 
 [project.optional-dependencies]
 market = ["baostock==0.9.3"]
+official = ["pypdf==6.10.0"]
 
 [project.scripts]
 a-share-research = "a_share_research.cli:main"

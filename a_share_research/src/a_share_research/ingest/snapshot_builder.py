@@ -276,8 +276,6 @@ def _validate_and_copy_seed(seed: Mapping[str, Any]) -> tuple[dict[str, Any], tu
                     f"{prefix}.security_id must be {expected_security_id} for symbol {symbol}"
                 )
             candidate_symbols.append(normalized_symbol)
-    if not candidate_symbols:
-        raise CollectionError("research seed must contain at least one candidate")
     _validate_complete_editorial_seed(data)
     return data, tuple(candidate_symbols)
 

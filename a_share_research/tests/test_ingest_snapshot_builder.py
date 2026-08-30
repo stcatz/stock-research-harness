@@ -207,6 +207,28 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertEqual(pricing["origin"], "deterministic_market_signal")
         self.assertEqual(pricing["assessment"], "underreacted")
 
+    def test_allows_an_empty_candidate_seed_without_inventing_a_stock(self) -> None:
+        seed = {"schema_version": "0.1", "market": "CN", "evidence": [], "themes": []}
+        benchmark_rows = {code: self.rows[code] for code in BENCHMARK_SYMBOLS}
+        provider = FakeProvider(benchmark_rows)
+
+        result = collect_cn_snapshot(
+            seed,
+            workspace=self.workspace,
+            snapshot_id="cn-policy-leads-only",
+            retrieved_at=self.retrieved_at,
+            provider=provider,
+        )
+
+        snapshot = json.loads((self.workspace / result.relative_path).read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["themes"], [])
+        self.assertEqual(
+            len(snapshot["market_context"]["evidence_refs"]),
+            len(BENCHMARK_SYMBOLS),
+        )
+        self.assertTrue(provider.login_called)
+        self.assertTrue(provider.logout_called)
+
     def test_hithink_uses_one_client_and_merges_enrichment_without_changing_gates(self) -> None:
         daily = collect_cn_market_data(
             ("sh.600000",),

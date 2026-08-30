@@ -7,7 +7,7 @@
 - [A 股题材研究引擎](a_share_research/README.md)：强调政策与事件催化、题材强度、受益传导、市场确认和证伪条件。
 - [美股研究引擎](us_equity_research/README.md)：强调官方披露、财务事实、确定性计算、正反论证和风险审查。
 
-两个项目都可以直接通过 CLI 使用，也可以安装为 DeepSeek Harness 的薄插件。无论入口是什么，正式报告都只由 Python 研究引擎生成；DeepSeek Harness 不接触数据源、不改写报告，也不承担持久化调度。
+两个项目都可以直接通过 CLI 使用，也可以安装为 DeepSeek Harness 的薄插件。无论入口是什么，正式报告都只由 Python 研究引擎生成；A 股联网 Harness 的模型只能提出官方来源坐标，原文下载、核验和事实提升由 Python 完成。DeepSeek Harness 不改写 canonical 报告，也不承担持久化调度。
 
 > [!IMPORTANT]
 > 当前版本是研究基础设施，不是股票预测器。仓库开箱即用的是合成 <code>demo</code>，仅用于安装和端到端验证。使用 <code>latest</code> 或 <code>id</code> 运行真实研究前，必须先准备符合 schema 的真实 snapshot。
@@ -79,13 +79,14 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 - A 股“研究 seed + 可选 BaoStock/HiThink provider”的显式单次快照采集器；HiThink 模式包含审计原始响应、全市场宽度、特色池、估值和年度三表。
 - 美股 SEC submissions/companyfacts 的显式单次快照采集器，并可选导入经过许可声明的行情 JSON。
 - 不依赖 DSH 的 CN 日报、US 验证 wrapper，以及 A 股 macOS <code>launchd</code> 示例。
-- 显式联网的 A 股双调用 Harness：thesis-blind bear 调查、最终裁判、联网机会发现和工作日调度模板。
+- 显式联网的 A 股三调用 Harness：受限官方来源发现、thesis-blind bear、最终裁判和工作日调度模板。
+- 官方 HTML/PDF 原文字节核验、仓库外 first-seen 存储，以及只面向公告直接主体的自动候选发现。
 
 ### 尚未内置
 
 - 可直接商用的数据供应商账号或 API key。
 - 历史 point-in-time 数据仓库。
-- A 股公告/政策全文自动发现与结构化，以及严格 PIT 回放。
+- A 股扫描件 OCR、全市场公告穷尽覆盖和严格历史 PIT 回放。
 - 美股发行人 IR、官方宏观、transcript 和一致预期采集。
 - 多市场常驻任务服务。当前只提供可审计的单次 wrapper 与 A 股 LaunchAgent 示例。
 - 自动发送邮件、微信、Slack 等发布渠道。
@@ -190,12 +191,14 @@ flowchart LR
 ## 质量闭环与显式联网 Harness
 
 <code>run</code> 仍是离线重放原语；联网模型通过单独的 Harness 参与，不会暗中改变 canonical
-报告。A 股每日 Harness 使用三段式边界：
+报告。A 股每日 Harness 使用四段式边界：
 
-1. collector 获取真实数据并冻结 snapshot，离线引擎输出不可变报告。
-2. 独立反方只读取 <code>facts</code> 区段，看不到 thesis、counter thesis 或最终裁决；它可以联网寻找
+1. 来源模型只提出允许域名的官方 URL、标题/日期逐字引文与直接公告主体；Python 下载原文字节、
+   禁止重定向、核验引文并冻结 first-seen。政策未直接具名公司时不生成股票。
+2. collector 把已核验官方证据与真实行情冻结为 snapshot，离线引擎输出不可变报告。
+3. 独立反方只读取 <code>facts</code> 区段，看不到 thesis、counter thesis 或最终裁决；它可以联网寻找
    decision_at 前的一手反证。
-3. 另一次模型调用分页读取 report/packet、读取截至 decision_at 已可用的 outcome history 和候选老化
+4. 另一次模型调用分页读取 report/packet、读取截至 decision_at 已可用的 outcome history 和候选老化
    历史，结合反方 JSON 输出强校验结构；确定性渲染器再生成非 canonical 机会备忘录和下一轮采集队列。
 
 每个候选同时具有：
@@ -232,7 +235,7 @@ cd stock-research-harness
 
 ~~~bash
 cd a_share_research
-uv sync --frozen
+uv sync --frozen --extra market --extra official
 uv run a-share-research doctor
 uv run a-share-research demo
 ~~~
@@ -878,11 +881,13 @@ http://127.0.0.1:3080
 
 ### 6. 真实采集与无 DSH 工作流
 
-A 股的研究 seed 保存已经人工核验的政策、公告、题材和候选；采集器可选择 BaoStock 或 HiThink 补充结构化市场数据。先复制示例并替换全部合成内容，示例标记未清理时采集器会在联网前拒绝：
+A 股的研究 seed 可保存人工核验的政策、公告、题材和候选；联网 Harness 还会在 canonical 运行前自动
+发现并核验官方原文，只为公告直接主体补充候选。先复制示例并替换全部合成内容，示例标记未清理时
+采集器会在联网前拒绝：
 
 ~~~bash
 cd ~/ai/stock/a_share_research
-uv sync --extra market
+uv sync --extra market --extra official
 cp config/research_seed.example.json ~/ai/stock/data/seeds/cn-research-seed.json
 # 编辑副本：删除 example_notice，替换 example.invalid、合成名称和研究结论
 
@@ -945,8 +950,9 @@ bash ~/ai/stock/scripts/run_us_validation.sh \
   --snapshot-id us-20260818-validation-v1
 ~~~
 
-显式联网的 A 股 Harness 会先用冻结快照自动结算精确 T+5/T+20，再执行一次 thesis-blind 反方调用
-和一次结构化最终裁判；canonical artifact 不被修改：
+显式联网的 A 股 Harness 先执行受限来源坐标发现，由 Python 下载、逐字核验官方 HTML/PDF 并编译
+候选，再冻结 snapshot、自动结算精确 T+5/T+20，最后执行 thesis-blind 反方与结构化裁判；canonical
+artifact 不被修改：
 
 ~~~bash
 bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
@@ -954,21 +960,28 @@ bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
   --provider hithink \
   --dsh-bin "$(command -v dsh)" \
+  --discovery-profile web \
   --bear-profile skeptic \
   --judge-profile headless \
+  --discovery-model-id your-source-model-version \
   --bear-model-id your-bear-model-version \
   --judge-model-id your-judge-model-version
 ~~~
 
-反方与裁判 profile 必须不同；默认分别为 <code>web</code> 和 <code>headless</code>。声明的 model ID 只用于
-审计，实际模型仍由各自 DSH profile 决定，因此调度前应核对两个 profile 的 provider/model 配置。
+反方与裁判 profile 必须不同；默认分别为 <code>web</code> 和 <code>headless</code>，来源发现默认使用
+<code>web</code>。声明的 model ID 只用于审计，实际模型仍由各自 DSH profile 决定，因此调度前应核对
+三个调用的 provider/model 配置。
 
-输出保存在 <code>.runtime/harness/cn/&lt;snapshot_id&gt;/</code>：canonical runner 回执、完整分页校验
-回执、drift、settlement、冻结的 outcome/research history、独立反方 JSON、最终裁判 JSON 和瘦身
-机会备忘录彼此分开；<code>harness-manifest.json</code> 固定代码版本、DSH 二进制哈希、两个 profile/
+输出保存在 <code>.runtime/harness/cn/&lt;snapshot_id&gt;/</code>：官方发现/采集回执、canonical runner 回执、
+完整分页校验回执、drift、settlement、冻结的 outcome/research history、独立反方 JSON、最终裁判 JSON
+和瘦身机会备忘录彼此分开；<code>harness-manifest.json</code> 固定代码版本、DSH 二进制哈希、三个调用的 profile/
 声明模型版本、prompt 和原始/规范化输出哈希，且不记录密钥。
-新发现线索在进入下一份冻结 snapshot 前只能保持
-<code>continue_research / 尚未冻结</code>。
+来源阶段通过 Python 原文核验的直接公告主体会进入本次 snapshot；最终裁判临时发现但未经过该链路的
+线索仍只能保持 <code>continue_research / 尚未冻结</code>。
+
+官方原文字节只保存在仓库与 runtime workspace 之外的私有 first-seen 目录；可用
+<code>--official-raw-store-root</code> 或 <code>STOCK_RESEARCH_OFFICIAL_RAW_STORE</code> 指定绝对路径。
+系统不提交或再分发原始公告，部署者仍须核对官方站点访问、缓存和展示条款。
 
 ### 7. 每日调度
 
@@ -1220,7 +1233,7 @@ stock-research-harness/
 
 短期优先级：
 
-1. 把联网 Harness 的“尚未冻结线索”接入官方公告/政策的增量验证与 first-seen 仓库。
+1. 在现有官方原文 first-seen 链上增加经授权的交易所增量目录适配、扫描件 OCR 与人工复核队列。
 2. 在现有 SEC 采集器上增加发行人 IR、官方宏观与经过授权的行情 adapter。
 3. 用真实 forward snapshot 连续填充已实现的 T+5/T+20 sidecar，并按 regime 分层盲评。
 4. 增加行业分类和历史估值仓库，把当前明确为 UNKNOWN 的两个分位变成严格 PIT 计算。

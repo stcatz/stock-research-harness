@@ -1309,8 +1309,6 @@ def _normalize_candidates(raw_candidates: Sequence[str]) -> tuple[str, ...]:
         if code not in seen:
             seen.add(code)
             normalized.append(code)
-    if not normalized:
-        raise ValueError("candidate_thscodes must contain at least one code")
     return tuple(normalized)
 
 
