@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stcatz.example/schemas/a-share-official-collection-result-0.1.json",
+  "title": "A-share official evidence collection receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "market",
+    "contract_version",
+    "discovery_window",
+    "proposed_source_count",
+    "accepted_source_count",
+    "rejected_source_count",
+    "generated_candidate_count",
+    "policy_lead_count",
+    "accepted",
+    "rejected",
+    "compiled_seed_sha256",
+    "raw_documents_embedded_in_receipt",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "contract_version": { "const": "official-evidence-v1" },
+    "discovery_window": { "$ref": "#/$defs/discovery_window" },
+    "proposed_source_count": { "type": "integer", "minimum": 0, "maximum": 20 },
+    "accepted_source_count": { "type": "integer", "minimum": 0, "maximum": 20 },
+    "rejected_source_count": { "type": "integer", "minimum": 0, "maximum": 20 },
+    "generated_candidate_count": { "type": "integer", "minimum": 0, "maximum": 20 },
+    "policy_lead_count": { "type": "integer", "minimum": 0, "maximum": 20 },
+    "accepted": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/accepted" }
+    },
+    "rejected": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/rejected" }
+    },
+    "compiled_seed_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "raw_documents_embedded_in_receipt": { "const": false },
+    "receipt_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "discovery_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      }
+    },
+    "accepted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_key",
+        "source_url",
+        "category",
+        "evidence_id",
+        "event_type",
+        "issuer_security_id",
+        "candidate_generated",
+        "raw_artifact_id",
+        "body_sha256",
+        "first_seen_at",
+        "retrieved_at",
+        "raw_artifact_created"
+      ],
+      "properties": {
+        "source_key": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+        "source_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "category": { "enum": ["company_disclosure", "policy"] },
+        "evidence_id": { "type": "string", "pattern": "^OFFICIAL-[A-F0-9]{20}$" },
+        "event_type": { "type": "string", "minLength": 1 },
+        "issuer_security_id": {
+          "type": ["string", "null"],
+          "pattern": "^CN\\.(SH|SZ|BJ)\\.[0-9]{6}$"
+        },
+        "candidate_generated": { "type": "boolean" },
+        "raw_artifact_id": { "type": "string", "pattern": "^official-[a-f0-9]{24}$" },
+        "body_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "first_seen_at": { "type": "string", "format": "date-time" },
+        "retrieved_at": { "type": "string", "format": "date-time" },
+        "raw_artifact_created": { "type": "boolean" }
+      }
+    },
+    "rejected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_key", "source_url", "reason"],
+      "properties": {
+        "source_key": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+        "source_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

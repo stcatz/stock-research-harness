@@ -19,7 +19,13 @@ from .core.outcomes import (
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.research_history import summarize_research_history
 from .core.storage import initialize_workspace
-from .ingest import collect_cn_snapshot, probe_hithink_provider
+from .core.utils import sha256_value, write_json_atomic
+from .ingest import (
+    collect_cn_snapshot,
+    collect_official_evidence,
+    normalize_official_discovery_output,
+    probe_hithink_provider,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,6 +88,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed-json",
         required=True,
         help="Editorial research seed JSON without market data",
+    )
+
+    discovery_parser = subparsers.add_parser(
+        "official-discovery-normalize",
+        help="Normalize exactly one bounded official-source discovery model contract",
+    )
+    discovery_parser.add_argument("--input", required=True, type=Path)
+    discovery_parser.add_argument("--output", required=True, type=Path)
+    discovery_parser.add_argument("--window-start", required=True)
+    discovery_parser.add_argument("--window-end", required=True)
+
+    official_parser = subparsers.add_parser(
+        "collect-official-evidence",
+        help="Fetch, verify and compile official documents into an editorial research seed",
+    )
+    official_parser.add_argument("--seed-json", required=True)
+    official_parser.add_argument("--discovery-json", required=True)
+    official_parser.add_argument("--output-seed-json", required=True, type=Path)
+    official_parser.add_argument(
+        "--official-raw-store-root",
+        type=Path,
+        help=(
+            "Private immutable official-document store. Defaults to "
+            "STOCK_RESEARCH_OFFICIAL_RAW_STORE or the platform user-data directory."
+        ),
     )
     collect_parser.add_argument(
         "--snapshot-id",
@@ -157,6 +188,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raw_store_root=args.raw_store_root,
             )
             result = collected.to_dict()
+        elif args.command == "official-discovery-normalize":
+            normalized = normalize_official_discovery_output(
+                args.input.read_text(encoding="utf-8"),
+                window_start=args.window_start,
+                window_end=args.window_end,
+            )
+            write_json_atomic(args.output, normalized)
+            result = {
+                "schema_version": SCHEMA_VERSION,
+                "market": "CN",
+                "status": "normalized",
+                "source_count": len(normalized["sources"]),
+                "discovery_sha256": sha256_value(normalized),
+            }
+        elif args.command == "collect-official-evidence":
+            official = collect_official_evidence(
+                _read_json(args.seed_json),
+                _read_json(args.discovery_json),
+                workspace=workspace,
+                raw_store_root=args.official_raw_store_root,
+            )
+            write_json_atomic(args.output_seed_json, official.seed)
+            result = official.receipt
         elif args.command == "provider-probe":
             result = probe_hithink_provider(
                 args.symbol,

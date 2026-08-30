@@ -15,10 +15,14 @@
     <string>__PROVIDER__</string>
     <string>--dsh-bin</string>
     <string>__DSH_BIN__</string>
+    <string>--discovery-profile</string>
+    <string>web</string>
     <string>--bear-profile</string>
     <string>web</string>
     <string>--judge-profile</string>
     <string>headless</string>
+    <string>--discovery-model-id</string>
+    <string>UNKNOWN</string>
     <string>--bear-model-id</string>
     <string>UNKNOWN</string>
     <string>--judge-model-id</string>

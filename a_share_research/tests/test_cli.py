@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from a_share_research.cli import main
@@ -129,6 +130,89 @@ class CliTests(unittest.TestCase):
         self.assertEqual(call.kwargs["snapshot_id"], "cn-test")
         self.assertEqual(call.kwargs["provider_kind"], "baostock")
         self.assertNotIn("retrieved_at", call.kwargs)
+
+    def test_official_discovery_normalize_writes_the_validated_contract(self) -> None:
+        model_output = self.workspace / "model.out"
+        normalized_output = self.workspace / "normalized.json"
+        payload = {
+            "schema_version": "0.1",
+            "market": "CN",
+            "discovery_window": {
+                "start": "2026-08-27T00:00:00+08:00",
+                "end": "2026-08-28T00:00:00+08:00",
+            },
+            "sources": [],
+        }
+        model_output.write_text(
+            "前言\n" + json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        stdout = io.StringIO()
+
+        with redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "official-discovery-normalize",
+                    "--input",
+                    str(model_output),
+                    "--output",
+                    str(normalized_output),
+                    "--window-start",
+                    payload["discovery_window"]["start"],
+                    "--window-end",
+                    payload["discovery_window"]["end"],
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(normalized_output.read_text(encoding="utf-8")), payload)
+        self.assertEqual(json.loads(stdout.getvalue())["source_count"], 0)
+
+    def test_collect_official_evidence_dispatches_and_writes_compiled_seed(self) -> None:
+        seed = {"schema_version": "0.1", "market": "CN", "evidence": [], "themes": []}
+        discovery = {
+            "schema_version": "0.1",
+            "market": "CN",
+            "discovery_window": {
+                "start": "2026-08-27T00:00:00+08:00",
+                "end": "2026-08-28T00:00:00+08:00",
+            },
+            "sources": [],
+        }
+        seed_path = self.workspace / "seed.json"
+        discovery_path = self.workspace / "discovery.json"
+        output_path = self.workspace / "compiled.json"
+        seed_path.write_text(json.dumps(seed), encoding="utf-8")
+        discovery_path.write_text(json.dumps(discovery), encoding="utf-8")
+        result = SimpleNamespace(
+            seed=seed,
+            receipt={"schema_version": "0.1", "market": "CN", "accepted_source_count": 0},
+        )
+        stdout = io.StringIO()
+
+        with (
+            patch("a_share_research.cli.collect_official_evidence", return_value=result) as collect,
+            redirect_stdout(stdout),
+        ):
+            exit_code = main(
+                [
+                    "--workspace",
+                    str(self.workspace),
+                    "collect-official-evidence",
+                    "--seed-json",
+                    str(seed_path),
+                    "--discovery-json",
+                    str(discovery_path),
+                    "--output-seed-json",
+                    str(output_path),
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), seed)
+        self.assertEqual(json.loads(stdout.getvalue())["accepted_source_count"], 0)
+        collect.assert_called_once()
 
     def test_collect_snapshot_dispatches_explicit_hithink_provider_and_raw_store(self) -> None:
         seed_path = self.workspace / "seed.json"

@@ -650,6 +650,26 @@ class HiThinkEnrichmentTests(unittest.TestCase):
 
         self.assertEqual(result.breadth.total, 3)
 
+    def test_policy_only_day_can_collect_market_context_without_candidates(self) -> None:
+        client = _QueueClient(_valid_responses())
+
+        result = collect_hithink_enrichment(
+            client,
+            latest_session=SESSION,
+            candidate_thscodes=[],
+            page_size=2,
+        )
+
+        self.assertEqual(result.breadth.total, 3)
+        self.assertEqual(result.valuations, ())
+        self.assertEqual(result.financial_periods, ())
+        self.assertFalse(
+            any(endpoint == HITHINK_VALUATIONS_ENDPOINT for endpoint, _params in client.calls)
+        )
+        self.assertFalse(
+            any(endpoint in HITHINK_FINANCIAL_ENDPOINTS for endpoint, _params in client.calls)
+        )
+
     def test_full_market_snapshot_uses_local_observation_time_not_assumed_eod(self) -> None:
         responses = _valid_responses()
         # The upstream value is a latest-valid-data time, not a guarantee that the

@@ -172,6 +172,8 @@ outcome 进入独立 append-only sidecar，绝不改写原 run。已从当日 se
 ## 7. 自动化边界
 
 DeepSeek Harness 官方支持 Web 工作区和一次性 `headless` 任务；定时运行由 `launchd` 或其他外部
-调度器调用 `scripts/run_cn_harness_daily.sh`。该 wrapper 依次完成 snapshot 冻结、canonical run、跨快照
-drift audit、事实盲审反方和最终机会备忘录。联网发现的新线索不会自动进入 seed；必须先由 collector
-支持的正式来源核验并冻结。没有明确数据许可和人工复核时不得部署相应抓取，更不能连接券商交易接口。
+调度器调用 `scripts/run_cn_harness_daily.sh`。该 wrapper 依次完成受限官方来源坐标发现、Python 原文
+下载与逐字核验、直接公告主体候选编译、snapshot 冻结、canonical run、跨快照 drift audit、事实盲审
+反方和最终机会备忘录。政策未直接点名发行人时只冻结为无候选线索；最终裁判临时发现但未走原文核验
+链的内容仍不得进入 canonical seed。没有明确数据许可和人工复核时不得部署相应抓取，更不能连接券商
+交易接口。

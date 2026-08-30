@@ -310,7 +310,9 @@ def _validate_theme(
     chain = require_list(theme.get("transmission_chain"), f"{prefix}.transmission_chain")
     for chain_index, link in enumerate(chain):
         require_string(link, f"{prefix}.transmission_chain[{chain_index}]")
-    parse_datetime(theme.get("next_catalyst_at"), f"{prefix}.next_catalyst_at")
+    next_catalyst_at = theme.get("next_catalyst_at")
+    if next_catalyst_at is not None:
+        parse_datetime(next_catalyst_at, f"{prefix}.next_catalyst_at")
     require_string(theme.get("counter_thesis"), f"{prefix}.counter_thesis")
     _validate_string_list(theme.get("invalidation_conditions"), f"{prefix}.invalidation_conditions")
     _validate_string_list(theme.get("data_gaps", []), f"{prefix}.data_gaps", allow_empty=True)

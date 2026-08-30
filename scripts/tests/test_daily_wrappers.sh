@@ -483,6 +483,24 @@ test_launchd_example() {
 
 test_launchd_installer() {
   [ -x "$CN_INSTALLER" ] || fail "launchd installer is missing or not executable"
+  if ! command -v plutil >/dev/null 2>&1; then
+    mkdir -p "$TEST_TMP/test-bin"
+    cat >"$TEST_TMP/test-bin/plutil" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[ "${1:-}" = "-lint" ] && [ "$#" -eq 2 ] || exit 2
+python3 - "$2" <<'PY'
+import plistlib
+from pathlib import Path
+import sys
+
+plistlib.loads(Path(sys.argv[1]).read_bytes())
+PY
+EOF
+    chmod 700 "$TEST_TMP/test-bin/plutil"
+    PATH="$TEST_TMP/test-bin:$PATH"
+    export PATH
+  fi
   "$CN_INSTALLER" --self-test >"$TEST_TMP/installer-self-test.stdout"
   assert_contains 'self-test passed' "$TEST_TMP/installer-self-test.stdout"
 

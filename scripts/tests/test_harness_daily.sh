@@ -29,6 +29,7 @@ assert [(item["Weekday"], item["Hour"], item["Minute"]) for item in intervals] =
 ]
 arguments = payload["ProgramArguments"]
 assert arguments[0].endswith("/scripts/run_cn_harness_daily.sh")
+assert arguments[arguments.index("--discovery-profile") + 1] == "web"
 assert arguments[arguments.index("--bear-profile") + 1] == "web"
 assert arguments[arguments.index("--judge-profile") + 1] == "headless"
 assert "EnvironmentVariables" not in payload
@@ -47,6 +48,8 @@ cp "$REPOSITORY/a_share_research/prompts/harness-independent-bear.md" \
   "$ROOT/a_share_research/prompts/harness-independent-bear.md"
 cp "$REPOSITORY/a_share_research/prompts/harness-daily-opportunity.md" \
   "$ROOT/a_share_research/prompts/harness-daily-opportunity.md"
+cp "$REPOSITORY/a_share_research/prompts/harness-official-discovery.md" \
+  "$ROOT/a_share_research/prompts/harness-official-discovery.md"
 cp -R "$REPOSITORY/a_share_research/src/a_share_research" \
   "$ROOT/a_share_research/src/a_share_research"
 mkdir -p "$ROOT/data/normalized/cn-harness-test"
@@ -66,7 +69,7 @@ chmod 755 "$ROOT/scripts/run_cn_harness_daily.sh"
 ln -s "$(command -v python3)" "$ROOT/a_share_research/.venv/bin/python"
 
 SEED="$TMP_ROOT/research-seed.json"
-printf '%s\n' '{"schema_version":"0.1","market":"CN","themes":[]}' >"$SEED"
+printf '%s\n' '{"schema_version":"0.1","market":"CN","evidence":[],"themes":[]}' >"$SEED"
 
 cat >"$ROOT/scripts/run_cn_daily.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -131,6 +134,10 @@ json_field() {
 CALLS=$(grep -c '^CALL$' "$DSH_TEST_LOG" 2>/dev/null || true)
 printf 'CALL\n' >>"$DSH_TEST_LOG"
 if [ "$CALLS" -eq 0 ]; then
+  WINDOW_START=$(printf '%s\n' "$3" | sed -n 's/^- discovery_window.start：`\([^`]*\)`.*/\1/p' | head -1)
+  WINDOW_END=$(printf '%s\n' "$3" | sed -n 's/^- discovery_window.end：`\([^`]*\)`.*/\1/p' | head -1)
+  printf '%s\n' "{\"schema_version\":\"0.1\",\"market\":\"CN\",\"discovery_window\":{\"start\":\"$WINDOW_START\",\"end\":\"$WINDOW_END\"},\"sources\":[]}"
+elif [ "$CALLS" -eq 1 ]; then
   FACTS_RECEIPT=$(artifact_receipt facts)
   FACTS_HASH=$(json_field "$FACTS_RECEIPT" content_sha256)
   FACTS_CHARS=$(json_field "$FACTS_RECEIPT" total_chars)
@@ -176,8 +183,10 @@ OUTPUT=$(
     --snapshot-id cn-harness-test \
     --decision-at 2026-08-26T20:30:00+08:00 \
     --dsh-bin "$DSH_BIN" \
+    --discovery-profile source-finder \
     --bear-profile skeptic \
     --judge-profile judge \
+    --discovery-model-id model-discovery-v1 \
     --bear-model-id model-bear-v1 \
     --judge-model-id model-judge-v2
 ) || fail "Harness wrapper failed"
@@ -197,6 +206,8 @@ grep -F '"candidate_index": []' "$OUTPUT_DIR/canonical.json" >/dev/null || \
 [ -f "$OUTPUT_DIR/settlement.json" ] || fail "settlement receipt was not preserved"
 [ -f "$OUTPUT_DIR/outcome-history.json" ] || fail "outcome history was not preserved"
 [ -f "$OUTPUT_DIR/research-history.json" ] || fail "research history was not preserved"
+[ -f "$OUTPUT_DIR/official-discovery.json" ] || fail "official discovery was not preserved"
+[ -f "$OUTPUT_DIR/official-collection.json" ] || fail "official collection receipt was not preserved"
 [ -f "$OUTPUT_DIR/independent-bear.json" ] || fail "bear review was not preserved"
 [ -f "$OUTPUT_DIR/final-judgment.json" ] || fail "final judgment was not preserved"
 [ -f "$OUTPUT_DIR/opportunity-memo.md" ] || fail "memo was not preserved"
@@ -204,18 +215,28 @@ grep -F '"candidate_index": []' "$OUTPUT_DIR/canonical.json" >/dev/null || \
 grep -F 'section=facts' "$DSH_LOG" >/dev/null || fail "bear prompt did not require facts"
 grep -F 'independent_bear_review_json_string' "$DSH_LOG" >/dev/null || \
   fail "final prompt did not receive the independent review"
+grep -F 'official_collection_receipt_json_string' "$DSH_LOG" >/dev/null || \
+  fail "final prompt did not receive the official collection receipt"
 if grep -F 'secret leaked' "$DSH_LOG" >/dev/null; then
   fail "provider secret reached DSH"
 fi
-[ "$(grep -c '^CALL$' "$DSH_LOG")" -eq 2 ] || fail "Harness did not make two isolated calls"
+[ "$(grep -c '^CALL$' "$DSH_LOG")" -eq 3 ] || fail "Harness did not make three bounded calls"
 grep -F '"provider_credentials_forwarded_to_models": false' \
   "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost credential boundary"
 grep -F '"input_scope": "facts_only"' \
   "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost thesis-blind scope"
+grep -F '"role": "official_source_discovery"' \
+  "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost discovery model call"
+grep -F '"model_output_accepted_as_fact": false' \
+  "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost model/fact boundary"
+grep -F '"policy_to_company_mapping_automated": false' \
+  "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost policy mapping boundary"
 grep -F '"review_profiles_distinct": true' \
   "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost profile independence"
 grep -F '"declared_model_id": "model-bear-v1"' \
   "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost bear model identity"
+grep -F '"declared_model_id": "model-discovery-v1"' \
+  "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost discovery model identity"
 grep -F '"declared_model_id": "model-judge-v2"' \
   "$OUTPUT_DIR/harness-manifest.json" >/dev/null || fail "manifest lost judge model identity"
 

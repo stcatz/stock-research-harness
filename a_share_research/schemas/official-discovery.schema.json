@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stcatz.example/schemas/a-share-official-discovery-0.1.json",
+  "title": "A-share official-source discovery contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "market", "discovery_window", "sources"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "discovery_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/source" }
+    }
+  },
+  "$defs": {
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["security_id", "symbol", "name", "name_quote", "symbol_quote"],
+      "properties": {
+        "security_id": { "type": "string", "pattern": "^CN\\.(SH|SZ|BJ)\\.[0-9]{6}$" },
+        "symbol": { "type": "string", "pattern": "^[0-9]{6}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "name_quote": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "symbol_quote": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_url",
+        "category",
+        "title",
+        "title_quote",
+        "published_at",
+        "published_at_precision",
+        "published_at_quote",
+        "effective_at",
+        "effective_at_quote",
+        "issuer"
+      ],
+      "properties": {
+        "source_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "category": { "enum": ["company_disclosure", "policy"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "title_quote": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "published_at": { "type": "string", "format": "date-time" },
+        "published_at_precision": { "enum": ["date", "datetime"] },
+        "published_at_quote": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "effective_at": { "type": ["string", "null"], "format": "date-time" },
+        "effective_at_quote": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "issuer": { "oneOf": [{ "$ref": "#/$defs/issuer" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "category": { "const": "policy" } } },
+          "then": { "properties": { "issuer": { "type": "null" } } },
+          "else": { "properties": { "issuer": { "$ref": "#/$defs/issuer" } } }
+        },
+        {
+          "if": { "properties": { "effective_at": { "type": "null" } } },
+          "then": { "properties": { "effective_at_quote": { "type": "null" } } },
+          "else": { "properties": { "effective_at_quote": { "type": "string" } } }
+        }
+      ]
+    }
+  }
+}
