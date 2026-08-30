@@ -105,6 +105,23 @@ def render_report(packet: dict[str, Any]) -> str:
         )
     lines.append("")
 
+    lines.extend(["## 可执行研究队列", ""])
+    if packet["research_queue"]:
+        for item in packet["research_queue"]:
+            lines.append(
+                f"- **{item['name']}（{item['symbol']}）**：优先级 "
+                f"`{item['research_priority']}/100`，缺口 {len(item['gaps'])} 项，"
+                "独立反方复核待完成。"
+            )
+            for gap in item["gaps"]:
+                lines.append(
+                    f"  - `{gap['gap_id']}` [{gap['state']}] 责任：`{gap['resolver']}`；"
+                    f"转换条件：{gap['transition_condition']}；截止：{gap['expires_at']}"
+                )
+    else:
+        lines.append("- 本次没有待处理研究缺口。")
+    lines.append("")
+
     lines.extend(
         [
             "## 明日需要补充的数据",
@@ -133,6 +150,8 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
         f"### {index}. {candidate['name']}（{candidate['symbol']}）",
         "",
         f"- 处理结果：**{candidate['decision_label']}**",
+        f"- 研究优先级：`{candidate['research_priority']}/100`",
+        f"- 证据状态：`{candidate['evidence_state']}`",
         f"- 角色：{ROLE_LABELS[candidate['role']]}",
         f"- 周期阶段：{candidate['stage']}",
         f"- 风险标志：{_join_or_unknown(candidate['risk_flags'])}",
@@ -175,7 +194,26 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
             f"- 证伪条件：{_join_or_unknown(candidate['invalidation_conditions'])}",
             f"- 数据缺口：{_join_or_unknown(candidate['data_gaps'])}",
             f"- 待人工复核：{_join_or_unknown(candidate['manual_review_items'])}",
+            "- 独立证伪：待联网 Harness 仅基于事实层完成，且不向反方展示多方结论。",
             f"- 处理理由：{'；'.join(candidate['reasons'])}",
+            "",
+            "#### 估值画像（确定性计算）",
+            "",
+            "| 指标 | 状态 | 数值 | 快照候选集分位 | 样本数 | 行业分位 | 自身历史分位 |",
+            "|---|---|---:|---:|---:|---|---|",
+        ]
+    )
+    for metric in candidate["valuation_profile"]["metrics"]:
+        lines.append(
+            f"| {metric['metric']} | {metric['status']} | "
+            f"{metric['value'] if metric['value'] is not None else 'UNKNOWN'} | "
+            f"{metric['snapshot_candidate_percentile'] if metric['snapshot_candidate_percentile'] is not None else 'UNKNOWN'} | "
+            f"{metric['sample_size']} | UNKNOWN | UNKNOWN |"
+        )
+    lines.extend(
+        [
+            "",
+            "> 分位范围仅为本次快照候选集，不是行业可比公司；行业与自身历史分位缺数时保持 UNKNOWN。",
             "",
         ]
     )

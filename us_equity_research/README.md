@@ -1,22 +1,28 @@
-# US Equity Research Engine v0.1
+# US Equity Research Engine (method v0.2)
 
 `us_equity_research/` is an auditable US-equity research engine. Research runs consume frozen snapshots offline; a separate, explicit SEC collector can build one snapshot from submissions/companyfacts metadata and an operator-reviewed research seed. The Python engine is the only canonical writer; the DeepSeek Harness adapter is a thin client that can trigger runs and read bounded artifact sections, but it never rewrites the canonical report.
 
-## What v0.1 does
+## What method v0.2 does
 
 - Fixed `market=US` handshake and strict versioned JSON contracts.
 - Three workflows: `daily_report`, `theme_research`, and `stock_research`.
 - Point-in-time validation across `published_at`, `effective_at`, `available_at`, `retrieved_at`, `as_of`, and `decision_at`.
 - Deterministic calculations with formula strings, `input_fact_ids`, and explicit `OK` / `UNKNOWN` / `NOT_MEANINGFUL` states.
-- Immutable `research_packet.json`, `report.md`, and `manifest.json` artifacts plus SQLite audit records.
+- Immutable `research_packet.json`, thesis-blind `fact_packet.json`, `report.md`, and `manifest.json`
+  artifacts plus SQLite audit records.
+- Deterministic `research_priority`, structured evidence gaps, and hard gates that soft scores cannot override.
+- Snapshot cross-sectional valuation percentiles; unavailable industry and historical PIT percentiles remain `UNKNOWN`.
+- Immutable T+5/T+20 outcomes relative to SPY, availability-gated calibration history, and snapshot drift receipts.
+- Lossless, hash-verifiable pagination for all artifact sections.
 - Research-only decisions: `exclude`, `continue_research`, `observe`.
 
 ## Current limits
 
-v0.1 is intentionally narrow:
+Method v0.2 is intentionally narrow:
 
 - The SEC collector does not parse filing prose and therefore does not claim that researcher-authored bull, bear, risk, or dimension narratives are verified by filing existence alone.
-- No issuer-IR, macro, transcript, consensus-estimate, full DCF, target-price, portfolio-construction, broker, or scheduled-job integration.
+- No automated issuer-IR, macro, transcript, consensus-estimate, full DCF, target-price, portfolio-construction,
+  broker, or US opportunity-discovery schedule integration.
 - No bundled market-data license. Price and valuation fields remain `UNKNOWN` unless the operator supplies a separately authorized market JSON.
 - No promise of production data coverage or strict first-public-availability replay. SEC snapshots are conservatively marked `P2`.
 - `demo` uses synthetic issuers and URLs only. Every fixture output stays visibly marked `fixture` / `FIXTURE`.
@@ -74,7 +80,7 @@ The production CLI always records its own UTC collection clock; it has no public
 
 `--market-json /path/to/market.json` is optional. The payload must explicitly attest `authorized_for_local_research_snapshot`, provide one finite positive `USD/share` close for every candidate, and preserve aligned evidence/fact timestamps. Without it, the snapshot is still valid SEC research input, but market gates and valuation calculations fail closed.
 
-To collect, validate, run by the exact new snapshot ID, and read the complete report in one command:
+To collect, validate, run by the exact new snapshot ID, and read the first verified report page in one command:
 
 ```bash
 SEC_USER_AGENT='stock-research-harness your-real-contact@example.com' \
@@ -177,24 +183,35 @@ Supported calculations include revenue growth, operating margin, free-cash-flow 
 
 ## Reading artifacts
 
-Use the bounded artifact reader for `summary`, `report`, `manifest`, or `packet`:
+Use the bounded artifact reader for `summary`, `report`, `manifest`, `packet`, or thesis-blind `facts`:
 
 ```bash
 printf '%s' '{
   "artifact_id": "us-artifact-demo_01",
   "section": "report",
-  "max_chars": 12000
+  "max_chars": 12000,
+  "cursor": 0
 }' | uv run us-equity-research artifact-read --request-json -
 ```
 
-The read result returns an opaque `artifact_id`, bounded content, and a relative path only. It never returns credentials, raw provider payloads, or absolute local paths.
+The result includes `next_cursor`, `total_chars`, and a full-section `content_sha256`. Follow every non-null
+`next_cursor`, concatenate pages in order, and verify the final length and hash. One page must not be represented as
+the complete report. The reader never returns credentials, raw provider payloads, or absolute local paths.
+
+`outcome-record`, `outcome-summary`, and `outcome-history` use the same JSON-stdin convention. The fixed benchmark
+is `SPY`, allowed horizons are T+5 and T+20, and returns use decimal form. Outcome slots are immutable and summaries
+exclude every observation whose `available_at` is later than `evaluation_at`. `candidate_id` is optional only when a
+symbol maps to exactly one candidate in that run; cross-theme duplicates require it and fail closed otherwise.
+`audit-drift` compares two explicit
+frozen snapshot IDs and stores an immutable receipt under `data/audit/us/provider-drift/`.
 
 ## DeepSeek Harness
 
-The adapter in `adapter-pkg/` exposes exactly two tools:
+The adapter in `adapter-pkg/` exposes exactly three business-level tools:
 
 - `us_research_run`
 - `us_artifact_read`
+- `us_outcome_history`
 
 It is a thin client for headless and Web profiles. It forwards versioned requests to the configured Python binary as `python -m us_equity_research.cli --workspace <workspace> ...`, returns bounded results, and does not read SQLite, provider APIs, or artifact directories directly.
 

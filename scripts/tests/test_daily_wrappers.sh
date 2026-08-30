@@ -182,7 +182,7 @@ test_cn_success() {
   assert_contains '"max_chars":20000' "$request_prefix.a_share_research.cli.artifact"
   assert_contains 'REAL RESEARCH REPORT' "$root/stdout"
   assert_contains '--provider baostock' "$call_log"
-  pass "CN success uses the exact newly collected real snapshot and reads the full report"
+  pass "CN success uses the exact new snapshot and reads the first verified report page"
 }
 
 test_cn_hithink_provider_is_explicit_and_secrets_are_not_arguments() {

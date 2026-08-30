@@ -2,16 +2,17 @@
 
 DeepSeek Harness `0.1.0-rc.6` compatible thin bundle for the offline US-equity research engine.
 
-It exposes exactly two model-facing tools:
+It exposes exactly three model-facing tools:
 
 - `us_research_run` runs `daily_report`, `theme_research`, or `stock_research`.
 - `us_artifact_read` reads a bounded predefined artifact section by opaque ID.
+- `us_outcome_history` reads prior availability-gated scorecards; it cannot write observations.
 
 The bundle is permanently bound to `market=US` and `schema_version=0.1`. It never connects to a data provider, SQLite, a broker, or the artifact filesystem itself. Instead it invokes the canonical Python writer with explicit argv and one JSON object on stdin:
 
 ```text
 .venv/bin/python -m us_equity_research.cli \
-  --workspace <workspace> run|artifact-read --request-json -
+  --workspace <workspace> run|artifact-read|outcome-history --request-json -
 ```
 
 ## Public tool contract
@@ -27,15 +28,26 @@ The bundle is permanently bound to `market=US` and `schema_version=0.1`. It neve
 
 The snapshot field is named `snapshot_id`; the legacy `id` alias is intentionally rejected.
 
-`us_artifact_read` accepts an `artifact_id`, an optional `summary | report | manifest | packet` section, and an optional `max_chars` from 500 through 20,000. When a user requests the full report, read `section=report`; `summary` is only a compact preview and must not be presented as the full report.
+`us_artifact_read` accepts an `artifact_id`, an optional
+`summary | report | manifest | packet | facts` section, an optional `max_chars` from 500 through 20,000, and an
+optional non-negative `cursor`. `facts` is thesis-blind. When a user requests the full report, follow every returned
+`next_cursor` for `section=report` and verify `content_sha256`/`total_chars`; `summary` is only a compact preview.
+
+`us_outcome_history` accepts a timezone-aware `evaluation_at` and optional `limit` from 1 through 20. It returns only
+prior observations available by that cutoff and exposes no outcome-write capability.
 
 The adapter keeps domain outcomes such as `partial`, `UNKNOWN`, and explicit data gaps as successful results. Contract and not-found errors remain structured. Process failures, timeouts, integrity failures, invalid handshakes, or non-canonical output are infrastructure errors.
 
-Model-visible structured run results preserve up to 20 focus candidates, matching the public `top_n` maximum. Warnings and gaps are bounded previews of up to five items each. Use `us_artifact_read` for the complete report or longer narrative instead of expecting it in the run result.
+Model-visible structured run results preserve up to 20 focus candidates, matching the public `top_n` maximum.
+Warnings and gaps are bounded previews of up to five items each. Use paginated `us_artifact_read` for the complete
+report or longer narrative instead of expecting it in the run result.
 
 ## Runtime boundaries
 
-The child receives a minimal system-variable allowlist and no model/data API credentials. Cancellation is forwarded from `exec.signal`; on supported macOS/Linux systems the complete child process group is terminated. CLI output, rendered content, lists, errors, paths, and secret-like values are bounded or redacted before reaching the model.
+The child receives a minimal system-variable allowlist and no model/data API credentials. Cancellation is forwarded
+from `exec.signal`; on supported macOS/Linux systems the complete child process group is terminated. Canonical artifact
+pages remain lossless so their hash is meaningful; if a page contains a secret-like value or absolute local path, the
+adapter fails closed instead of silently rewriting hashed content. Errors and bounded summaries are still redacted.
 
 Optional deployment overrides:
 

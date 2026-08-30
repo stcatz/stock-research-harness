@@ -4,8 +4,9 @@
 
 - 工具名：`cn_research_run`
 - 工具名：`cn_artifact_read`
+- 工具名：`cn_outcome_history`
 - 运行方式：显式 argv + JSON stdin/stdout 调用项目 `.venv` Python CLI
-- CLI 入口：`.venv/bin/python -m a_share_research.cli --workspace <workspace> run|artifact-read --request-json -`
+- CLI 入口：`.venv/bin/python -m a_share_research.cli --workspace <workspace> run|artifact-read|outcome-history --request-json -`
 - 市场固定：`CN`
 - 输出：canonical CLI JSON，白名单映射，不暴露绝对路径
 - 失败策略：`@deepseek-ai/dsh-tools` 缺失时拒绝加载，不静默降级
@@ -21,15 +22,23 @@
   - `subject?`, `symbol?`, `top_n?`
 - `cn_artifact_read`
   - `artifact_id`
-  - `section?`: `summary | report | manifest | packet`
-    - 用户要求完整报告时必须读取 `report`；`summary` 只是紧凑预览，不能当作完整报告返回。
+  - `section?`: `summary | report | manifest | packet | facts`
+    - `facts` 不含 thesis/counter thesis/最终决策，专供独立反方。
+    - 用户要求完整报告时必须分页读取 `report`；`summary` 只是紧凑预览，不能当作完整报告返回。
   - `max_chars?`
+  - `cursor?`: 从 0 开始；持续读取返回的 `next_cursor`，并验证 `content_sha256` 和 `total_chars`。
+- `cn_outcome_history`
+  - `evaluation_at`: 带时区 ISO-8601 时间
+  - `limit?`: 1–20；只返回当时已可用的旧结果，不写入 outcome。
 
 本包包含：
 
 - `dist/index.js`：Cordis 插件入口
 - `cordis.patch.yml`：DSH bundle patch
 - `package.json#dsh.bundle`：安装型 bundle 清单
+
+canonical 页面内容保持无损，才能与 `content_sha256` 对齐；如果页面出现疑似密钥或绝对本地路径，
+adapter 会 fail-closed，而不是静默改写内容后继续声称哈希可验证。错误消息和摘要仍会有界脱敏。
 
 本地构建与测试：
 

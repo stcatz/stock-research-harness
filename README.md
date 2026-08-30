@@ -69,11 +69,17 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 - 基于哈希的完整性检查、复用和防篡改读取。
 - 独立 SQLite 运行账本。
 - 有大小上限的 artifact 读取接口。
+- 可连续分页并校验整段哈希的 artifact 读取，以及不含多方 thesis 的 <code>facts</code> 区段。
+- 硬门槛与软质量分离的 0–100 研究优先级、证据状态和可执行缺口队列。
+- 候选集估值分位（明确不冒充行业或自身历史分位）。
+- 不改写原报告的 T+5/T+20 outcome sidecar、可用时间门槛和历史校准记忆。
+- CN/US 跨快照历史事实漂移审计与不可变 drift receipt。
 - A 股和美股各自独立的 DeepSeek Harness 薄插件。
 - 远程 Mac 同步脚本与 SSH 端口转发脚本。
 - A 股“研究 seed + 可选 BaoStock/HiThink provider”的显式单次快照采集器；HiThink 模式包含审计原始响应、全市场宽度、特色池、估值和年度三表。
 - 美股 SEC submissions/companyfacts 的显式单次快照采集器，并可选导入经过许可声明的行情 JSON。
 - 不依赖 DSH 的 CN 日报、US 验证 wrapper，以及 A 股 macOS <code>launchd</code> 示例。
+- 显式联网的 A 股双调用 Harness：thesis-blind bear 调查、最终裁判、联网机会发现和工作日调度模板。
 
 ### 尚未内置
 
@@ -85,7 +91,7 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 - 自动发送邮件、微信、Slack 等发布渠道。
 - 券商连接、订单管理和实盘执行。
 
-换句话说，当前仓库已经实现了“受控单次采集 → 可信快照 → 可审计报告”的纵向链路，但不会替你取得商业授权，也不等于完整生产数据平台。
+换句话说，当前仓库已经实现了“受控采集 → 可信快照 → 可审计报告 → 未来结果结算 → 历史校准”的闭环，但不会替你取得商业授权，也不等于完整生产数据平台。
 
 ## 核心设计原则
 
@@ -126,7 +132,7 @@ Stock Research Harness 把这些问题变成明确的工程约束：
 | SQLite | <code>data/stock_research.sqlite3</code> | <code>data/us_stock_research.sqlite3</code> |
 | artifacts | <code>artifacts/runs/&lt;run_id&gt;/</code> | <code>artifacts/us/runs/&lt;run_id&gt;/</code> |
 | 日报 | <code>reports/daily/</code> | <code>reports/us/daily/</code> |
-| DSH 工具 | <code>cn_research_run</code> / <code>cn_artifact_read</code> | <code>us_research_run</code> / <code>us_artifact_read</code> |
+| DSH 工具 | <code>cn_research_run</code> / <code>cn_artifact_read</code> / <code>cn_outcome_history</code> | <code>us_research_run</code> / <code>us_artifact_read</code> / <code>us_outcome_history</code> |
 
 两套引擎只共享仓库级规范，不共享运行时数据。不要把 A 股 snapshot 复制进美股目录，也不要在一个市场的请求里传入另一个市场的标的。
 
@@ -181,6 +187,30 @@ flowchart LR
 
 因此 DSH 只看到业务级工具，而不是 SEC、CNInfo、行情接口和 SQLite 等底层工具。
 
+## 质量闭环与显式联网 Harness
+
+<code>run</code> 仍是离线重放原语；联网模型通过单独的 Harness 参与，不会暗中改变 canonical
+报告。A 股每日 Harness 使用三段式边界：
+
+1. collector 获取真实数据并冻结 snapshot，离线引擎输出不可变报告。
+2. 独立反方只读取 <code>facts</code> 区段，看不到 thesis、counter thesis 或最终裁决；它可以联网寻找
+   decision_at 前的一手反证。
+3. 另一次模型调用分页读取 report/packet、读取截至 decision_at 已可用的 outcome history，结合反方
+   JSON 生成非 canonical 机会备忘录和下一轮采集队列。
+
+每个候选同时具有：
+
+- <code>evidence_state</code>：<code>sufficient</code>、<code>incomplete</code> 或 <code>conflicted</code>。
+- <code>research_priority</code>：硬门槛不能被软分数抵消；分数只用于同状态内研究排序。
+- <code>research_gaps</code>：状态、责任角色、阻塞性、转换条件和截止时间。
+- <code>falsification_contract</code>：规定反方只看事实层并输出可证伪测试。
+- <code>evaluation_contract</code>：以中证 800 / SPY 为基准，在 T+5/T+20 结算状态区分度。
+
+未来结果写入独立 <code>decision_outcomes</code> 表，原始 artifact 永不回写。任何历史记忆都按
+<code>available_at &lt;= evaluation_at</code> 过滤，避免事后结果穿越回旧研究时点。同一 symbol 若跨题材
+重复出现，回填合同强制提供 <code>candidate_id</code>，不会任意选择一条判断。run/artifact 身份同时包含
+方法版本，因此方法升级不会复用旧版本产物。
+
 ## 五分钟快速开始
 
 ### 前置条件
@@ -232,7 +262,7 @@ demo 的 <code>data_mode</code> 必须是 <code>fixture</code>，<code>pit_quali
 
 ## 如何运行每日主题和个股研究
 
-两个 CLI 共享下面五个离线子命令：
+两个 CLI 共享下面这些离线子命令：
 
 | 命令 | 用途 | 是否访问网络 |
 |---|---|---|
@@ -241,6 +271,10 @@ demo 的 <code>data_mode</code> 必须是 <code>fixture</code>，<code>pit_quali
 | <code>demo</code> | 使用仓库内合成 fixture 跑通链路 | 否 |
 | <code>run</code> | 运行一份版本化 JSON 研究请求 | 否 |
 | <code>artifact-read</code> | 按 artifact ID 读取一个受限区段 | 否 |
+| <code>outcome-record</code> | 追加一条不可变 T+5/T+20 结果观察 | 否 |
+| <code>outcome-summary</code> | 按 evaluation_at 汇总指定运行 | 否 |
+| <code>outcome-history</code> | 读取当时已可用的历史校准记忆 | 否 |
+| <code>audit-drift</code> | 比较两个冻结快照并持久化漂移 receipt | 否 |
 
 此外，A 股提供联网命令 <code>collect-snapshot</code>，美股提供联网命令 <code>collect-sec-snapshot</code>。它们只负责构建并发布验证通过的不可变 snapshot；<code>run</code> 本身仍然不联网。
 
@@ -379,7 +413,8 @@ cd us_equity_research
 printf '%s' '{
   "artifact_id": "YOUR_ARTIFACT_ID",
   "section": "report",
-  "max_chars": 12000
+  "max_chars": 12000,
+  "cursor": 0
 }' | uv run us-equity-research artifact-read --request-json -
 ~~~
 
@@ -391,8 +426,12 @@ printf '%s' '{
 | <code>report</code> | canonical Markdown 报告 |
 | <code>manifest</code> | 文件哈希、运行身份和完整性信息 |
 | <code>packet</code> | 结构化研究包 |
+| <code>facts</code> | 不含 thesis/counter thesis 的事实与确定性计算包，供独立反方使用 |
 
-如果不传 <code>section</code>，默认读取 <code>summary</code>。<code>max_chars</code> 范围是 500–20000，默认 12000。接口刻意限制返回大小，完整原始数据不会被塞进模型上下文。
+如果不传 <code>section</code>，默认读取 <code>summary</code>。<code>max_chars</code> 范围是 500–20000，默认 12000。
+返回值包含 <code>cursor</code>、<code>next_cursor</code>、<code>total_chars</code> 和
+<code>content_sha256</code>；只要 <code>next_cursor</code> 非空，就用它继续读取，并确认各页哈希和总长度一致。
+各页内容可无损拼接，不再依赖带省略标记的伪“全文”。
 
 ## 如何准备真实快照
 
@@ -517,6 +556,7 @@ us_equity_research/artifacts/us/runs/<run_id>/
 | <code>request.json</code> | 规范化后的研究请求 |
 | <code>snapshot.json</code> | 本次运行实际使用的冻结输入 |
 | <code>research_packet.json</code> | 结构化事实、计算、论点、风险和缺口 |
+| <code>fact_packet.json</code> | thesis-blind 事实包，供独立反方调用 |
 | <code>report.md</code> | canonical 人类可读报告 |
 | <code>summary.json</code> | 有界摘要与重点研究对象 |
 | <code>manifest.json</code> | 文件哈希、运行身份和完整性元数据 |
@@ -591,12 +631,12 @@ DeepSeek Harness 适合做：
 
 ### 适配器暴露的工具
 
-| 市场 | 运行工具 | 读取工具 |
-|---|---|---|
-| A 股 | <code>cn_research_run</code> | <code>cn_artifact_read</code> |
-| 美股 | <code>us_research_run</code> | <code>us_artifact_read</code> |
+| 市场 | 运行工具 | 读取工具 | 历史反馈工具 |
+|---|---|---|---|
+| A 股 | <code>cn_research_run</code> | <code>cn_artifact_read</code> | <code>cn_outcome_history</code> |
+| 美股 | <code>us_research_run</code> | <code>us_artifact_read</code> | <code>us_outcome_history</code> |
 
-每个适配器只注册两个业务级工具。它通过显式 argv 和单个 JSON stdin 调用对应 Python CLI，并把取消信号传给整个 Unix 子进程组。
+每个适配器只注册三个业务级工具。它通过显式 argv 和单个 JSON stdin 调用对应 Python CLI，并把取消信号传给整个 Unix 子进程组。结果写入和底层数据库仍不暴露给模型。
 
 ### 构建 A 股适配器
 
@@ -689,7 +729,8 @@ top_n=5
 
 ~~~text
 请调用 us_artifact_read，读取 artifact_id=YOUR_ARTIFACT_ID 的 report，
-max_chars=12000。只总结报告中已有的事实和结论，不要重写 canonical 报告。
+max_chars=12000、cursor=0。只要 next_cursor 非空就继续读取，并核对 content_sha256。
+只总结报告中已有的事实和结论，不要重写 canonical 报告。
 ~~~
 
 切换到真实数据时，把 <code>demo</code> 改成 <code>latest</code> 或指定 <code>id</code>，前提是相应目录已经有验证通过的真实 snapshot。
@@ -885,7 +926,8 @@ uv run us-equity-research --workspace ~/ai/stock \
   --snapshot-id us-20260818-sec-v1
 ~~~
 
-两个 wrapper 都按显式 snapshot ID 执行，并最终返回完整 report artifact；它们不依赖 DSH，也不会退回 demo。A 股日报只接受本次新建的 snapshot，且 <code>decision_at</code> 不能早于实际抓取时间：
+两个 canonical wrapper 都按显式 snapshot ID 执行并返回 report artifact 的首个可验证分页；按
+<code>next_cursor</code> 可读取完整内容。它们不依赖 DSH，也不会退回 demo。A 股日报只接受本次新建的 snapshot，且 <code>decision_at</code> 不能早于实际抓取时间：
 
 ~~~bash
 bash ~/ai/stock/scripts/run_cn_daily.sh \
@@ -900,6 +942,23 @@ bash ~/ai/stock/scripts/run_us_validation.sh \
   --snapshot-id us-20260818-validation-v1
 ~~~
 
+显式联网的 A 股 Harness 会再执行一次 thesis-blind 反方调用和一次最终裁判/机会发现调用；canonical
+artifact 不被修改：
+
+~~~bash
+bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
+  --dsh-bin "$(command -v dsh)" \
+  --profile headless
+~~~
+
+输出保存在 <code>.runtime/harness/cn/&lt;snapshot_id&gt;/</code>：canonical receipt、drift receipt、
+独立反方 JSON 和最终机会备忘录彼此分开；<code>harness-manifest.json</code> 另行固定代码版本、prompt
+模板、模型角色边界和输出哈希，且不记录密钥。新发现线索在进入下一份冻结 snapshot 前只能保持
+<code>continue_research / 尚未冻结</code>。
+
 ### 7. 每日调度
 
 本项目不把 DSH session job 当成日报调度器。A 股已提供工作日 20:30 的 macOS LaunchAgent 安装器：
@@ -912,7 +971,14 @@ bash ~/ai/stock/scripts/install_cn_launchd.sh \
   --load
 ~~~
 
-安装器默认只渲染 plist；只有 <code>--load</code> 才会加载。执行顺序是“采集 → 显式 ID 研究 → canonical artifact → 完整报告”，所以即使 DSH 暂停或升级失败，日报链路也不会停止。LaunchAgent 不读取 <code>~/.zshrc</code>，安装器也不会把 HiThink Key 写进 plist；使用 HiThink 调度时，必须另行通过登录会话或 Keychain 秘密注入 <code>HITHINK_FINANCE_API_KEY</code>。缺少 Key 时采集会安全失败。美股目前提供单次验证 wrapper，不默认安装定时任务。
+安装器默认只渲染 plist；只有 <code>--load</code> 才会加载。执行顺序是“采集 → 显式 ID 研究 → canonical artifact → 可校验报告分页”，所以即使 DSH 暂停或升级失败，日报链路也不会停止。LaunchAgent 不读取 <code>~/.zshrc</code>，安装器也不会把 HiThink Key 写进 plist；使用 HiThink 调度时，必须另行通过登录会话或 Keychain 秘密注入 <code>HITHINK_FINANCE_API_KEY</code>。缺少 Key 时采集会安全失败。美股目前提供单次验证 wrapper，不默认安装定时任务。
+
+联网版本的工作日 20:45 模板位于
+<code>scripts/launchd/com.stcatz.stock-research.cn-harness-daily.plist.example</code>。复制后只替换
+<code>__ROOT__</code>、<code>__SEED_JSON__</code>、<code>__PROVIDER__</code> 和 <code>__DSH_BIN__</code>，先用
+<code>mkdir -p __ROOT__/.runtime/logs &amp;&amp; chmod 700 __ROOT__/.runtime/logs</code> 创建私有日志目录，
+再用 <code>plutil -lint</code> 检查并通过
+<code>launchctl bootstrap</code> 加载。模板不保存任何 API key。
 
 ## 数据源和许可证策略
 
@@ -1002,6 +1068,8 @@ npm pack --dry-run
 bash -n scripts/deploy_remote.sh
 bash -n scripts/deploy_us_remote.sh
 bash -n scripts/open_ssh_tunnel.sh
+bash -n scripts/run_cn_harness_daily.sh
+bash scripts/tests/test_harness_daily.sh
 bash scripts/deploy_us_remote.sh --self-test
 ~~~
 
@@ -1121,6 +1189,7 @@ stock-research-harness/
     ├── deploy_remote.sh
     ├── deploy_us_remote.sh
     ├── run_cn_daily.sh
+    ├── run_cn_harness_daily.sh
     ├── run_us_validation.sh
     ├── install_cn_launchd.sh
     ├── open_ssh_tunnel.sh
@@ -1140,11 +1209,11 @@ stock-research-harness/
 
 短期优先级：
 
-1. 在现有 A 股 seed + BaoStock/HiThink 采集器上增加官方公告/政策的增量发现、哈希和首次抓取时间。
+1. 把联网 Harness 的“尚未冻结线索”接入官方公告/政策的增量验证与 first-seen 仓库。
 2. 在现有 SEC 采集器上增加发行人 IR、官方宏观与经过授权的行情 adapter。
-3. 用真实 forward snapshot 连续生成并盲评日报。
-4. 记录主题和标的后续验证结果，评估研究质量而不是只评估格式正确率。
-5. 加固现有 LaunchAgent 的监控、失败告警和交易日历判断，同时保持调度与 DSH session 解耦。
+3. 用真实 forward snapshot 连续填充已实现的 T+5/T+20 sidecar，并按 regime 分层盲评。
+4. 增加行业分类和历史估值仓库，把当前明确为 UNKNOWN 的两个分位变成严格 PIT 计算。
+5. 加固 LaunchAgent 的失败告警、交易日历和 outcome 到期回填，同时保持 canonical run 可独立运行。
 6. 在数据授权明确后增加 estimate vintage、transcript 或更多财务字段。
 
 明确不在路线图内：

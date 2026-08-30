@@ -305,7 +305,7 @@ case "$ARTIFACT_ID" in
   ''|*[!A-Za-z0-9._-]*) die "research returned an invalid artifact ID" ;;
 esac
 
-printf 'run_cn_daily: reading the complete report artifact\n' >&2
+printf 'run_cn_daily: reading the first verified report page (follow next_cursor for more)\n' >&2
 if ! printf '%s\n' \
     "{\"artifact_id\":\"$ARTIFACT_ID\",\"section\":\"report\",\"max_chars\":20000}" \
     | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" artifact-read --request-json - \

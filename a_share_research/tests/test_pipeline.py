@@ -164,6 +164,25 @@ print(json.dumps(run_research(json.loads(sys.argv[2]), Path(sys.argv[1]))))
         with self.assertRaisesRegex(RuntimeError, "immutable artifact hash mismatch"):
             run_research(self.request, self.workspace)
 
+    def test_artifact_reader_rejects_a_database_index_conflict(self) -> None:
+        result = run_research(self.request, self.workspace)
+        database = self.workspace / "data" / "stock_research.sqlite3"
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "UPDATE artifacts SET report_path = ? WHERE artifact_id = ?",
+                ("artifacts/runs/conflicted/report.md", result["artifact_id"]),
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "index conflicts"):
+            read_artifact(
+                {
+                    "artifact_id": result["artifact_id"],
+                    "section": "report",
+                    "max_chars": 500,
+                },
+                self.workspace,
+            )
+
     def test_sqlite_records_every_candidate_including_exclusions(self) -> None:
         result = run_research(self.request, self.workspace)
         database = self.workspace / "data" / "stock_research.sqlite3"

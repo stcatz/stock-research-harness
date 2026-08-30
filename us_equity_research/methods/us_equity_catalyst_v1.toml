@@ -1,4 +1,4 @@
-id = "us-equity-catalyst-v1"
+id = "us-equity-research-v0.2"
 market = "US"
 purpose = "Financial-worker research prioritization only; never a trading signal."
 
@@ -30,6 +30,19 @@ future_catalyst = true
 calculations_complete = true
 issuer_specific_official = true
 no_time_leaks = true
+
+[quality_layer]
+hard_gates_are_not_averaged_away = true
+research_priority_range = [0, 100]
+continue_research_requires_transition_condition = true
+independent_bear_review = true
+valuation_scope_must_be_labeled = true
+
+[evaluation]
+metric = "benchmark_relative_total_return"
+benchmark = "SPY"
+horizons_trading_days = [5, 20]
+sidecar_is_immutable = true
 
 [allowed_decisions]
 values = ["exclude", "continue_research", "observe"]

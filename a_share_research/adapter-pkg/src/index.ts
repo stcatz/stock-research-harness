@@ -9,7 +9,7 @@ export const inject = ['tools']
 
 export type ResearchWorkflow = 'daily_report' | 'stock_research' | 'theme_research'
 type SnapshotSelector = 'demo' | 'latest' | 'id'
-type ArtifactSection = 'summary' | 'report' | 'manifest' | 'packet'
+type ArtifactSection = 'summary' | 'report' | 'manifest' | 'packet' | 'facts'
 type JsonObject = Record<string, unknown>
 
 export type Context = {
@@ -34,6 +34,12 @@ export type ArtifactReadArgs = {
   artifact_id: string
   section?: ArtifactSection
   max_chars?: number
+  cursor?: number
+}
+
+export type OutcomeHistoryArgs = {
+  evaluation_at: string
+  limit?: number
 }
 
 type CliBridgeOptions = {
@@ -83,6 +89,10 @@ type ArtifactReadSuccessResult = {
   content_type: string
   content: string
   truncated: boolean
+  cursor?: number
+  next_cursor?: number | null
+  total_chars?: number
+  content_sha256?: string
   relative_path?: string
 }
 
@@ -95,6 +105,7 @@ type CliErrorResult = {
 
 export type ResearchRunResult = RunSuccessResult | CliErrorResult
 export type ArtifactReadResult = ArtifactReadSuccessResult | CliErrorResult
+export type OutcomeHistoryResult = JsonObject | CliErrorResult
 
 const DEFAULT_TOP_N = 5
 const DEFAULT_MAX_CHARS = 12000
@@ -295,17 +306,37 @@ function normalizeRunArgs(args: unknown): ResearchRunArgs {
 
 function normalizeArtifactReadArgs(args: unknown): Required<ArtifactReadArgs> {
   const raw = ensurePlainObject(args, 'cn_artifact_read arguments')
-  rejectUnknownFields(raw, ['artifact_id', 'section', 'max_chars'], 'cn_artifact_read arguments')
+  rejectUnknownFields(
+    raw,
+    ['artifact_id', 'section', 'max_chars', 'cursor'],
+    'cn_artifact_read arguments',
+  )
   const artifactId = validateIdentifier(getString(raw.artifact_id, 'artifact_id') || '', 'artifact_id')
   const section = getString(raw.section, 'section') ?? 'summary'
-  if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet') {
-    throw new Error('section must be summary, report, manifest, or packet')
+  if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet' && section !== 'facts') {
+    throw new Error('section must be summary, report, manifest, packet, or facts')
+  }
+  const cursor = getInteger(raw.cursor, 'cursor') ?? 0
+  if (cursor < 0 || cursor > 10000000) {
+    throw new Error('cursor must be an integer between 0 and 10000000')
   }
   return {
     artifact_id: artifactId,
     section,
     max_chars: clampMaxChars(raw.max_chars),
+    cursor,
   }
+}
+
+function normalizeOutcomeHistoryArgs(args: unknown): Required<OutcomeHistoryArgs> {
+  const raw = ensurePlainObject(args, 'cn_outcome_history arguments')
+  rejectUnknownFields(raw, ['evaluation_at', 'limit'], 'cn_outcome_history arguments')
+  const evaluationAt = validateDecisionAt(raw.evaluation_at)
+  const limit = getInteger(raw.limit, 'limit') ?? 10
+  if (limit < 1 || limit > 20) {
+    throw new Error('limit must be an integer between 1 and 20')
+  }
+  return { evaluation_at: evaluationAt, limit }
 }
 
 function sanitizeCliError(raw: JsonObject): CliErrorResult {
@@ -382,6 +413,28 @@ function sanitizeRelativePath(value: unknown): string | undefined {
   return relativePath
 }
 
+function requireSafeArtifactContent(value: unknown, maxChars: number): string {
+  if (typeof value !== 'string') {
+    throw new Error('artifact content must be a string')
+  }
+  if (value.length > maxChars) {
+    throw new Error('CLI artifact content exceeded the requested max_chars contract')
+  }
+  const containsSecret = (
+    /\bBearer\s+[A-Za-z0-9._~+/=-]+/i.test(value)
+    || /\b(api[_-]?key|access[_-]?token|authorization|password|secret|token)\b\s*[:=]\s*[^\s,;]+/i.test(value)
+    || /\bsk-[A-Za-z0-9_-]{8,}\b/.test(value)
+  )
+  const containsAbsolutePath = (
+    /(?:^|[\s("'`])\/(?:Users|home|private|tmp|var|opt|Volumes|etc)\/[^\s"'`<>()]+/m.test(value)
+    || /[A-Za-z]:\\[^\s"'`<>()]+/.test(value)
+  )
+  if (containsSecret || containsAbsolutePath) {
+    throw new Error('canonical artifact content violated the model-visible safety boundary')
+  }
+  return value
+}
+
 function maybeParseJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
@@ -427,7 +480,7 @@ function childEnvironment(): NodeJS.ProcessEnv {
 }
 
 export async function callResearchCli(
-  command: 'run' | 'artifact-read',
+  command: 'run' | 'artifact-read' | 'outcome-history',
   request: JsonObject,
   options: CliBridgeOptions = {},
 ): Promise<unknown> {
@@ -470,6 +523,30 @@ export async function callResearchCli(
     return stdoutValue
   }
   throw new Error(`a_share_research CLI returned invalid JSON for ${command}`)
+}
+
+function sanitizeBoundedJson(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value == null || typeof value === 'boolean') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') return sanitizeErrorMessage(value).slice(0, 2000)
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => sanitizeBoundedJson(item, depth + 1))
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as JsonObject)
+      .filter(([key]) => !/(?:secret|token|password|credential|api[_-]?key)/i.test(key))
+      .slice(0, 100)
+      .map(([key, item]) => [key, sanitizeBoundedJson(item, depth + 1)])
+    return Object.fromEntries(entries)
+  }
+  return undefined
+}
+
+export function sanitizeOutcomeHistoryResult(raw: unknown): OutcomeHistoryResult {
+  const payload = ensurePlainObject(raw, 'outcome history result')
+  if (payload.error != null) return sanitizeCliError(payload)
+  if (payload.market !== 'CN' || payload.schema_version !== '0.1') {
+    throw new Error('CLI outcome history handshake failed; expected CN schema 0.1')
+  }
+  return sanitizeBoundedJson(payload) as JsonObject
 }
 
 export function sanitizeResearchRunResult(raw: unknown): ResearchRunResult {
@@ -539,15 +616,11 @@ export function sanitizeArtifactReadResult(raw: unknown, maxChars: number = DEFA
   }
 
   const section = getString(payload.section, 'section')
-  if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet') {
+  if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet' && section !== 'facts') {
     throw new Error('CLI artifact result returned an unsupported section')
   }
 
-  const content = getString(payload.content, 'content') || ''
-  const marker = '\n…[truncated]'
-  const cappedContent = content.length > maxChars
-    ? `${content.slice(0, Math.max(0, maxChars - marker.length))}${marker}`
-    : content
+  const content = requireSafeArtifactContent(payload.content, maxChars)
 
   return omitUndefinedProperties({
     schema_version: getString(payload.schema_version, 'schema_version') || '0.1',
@@ -555,8 +628,12 @@ export function sanitizeArtifactReadResult(raw: unknown, maxChars: number = DEFA
     artifact_id: getString(payload.artifact_id, 'artifact_id') || '',
     section,
     content_type: getString(payload.content_type, 'content_type') || 'text/plain',
-    content: cappedContent,
-    truncated: Boolean(getBoolean(payload.truncated, 'truncated') || content.length > maxChars),
+    content,
+    truncated: Boolean(getBoolean(payload.truncated, 'truncated')),
+    cursor: getInteger(payload.cursor, 'cursor'),
+    next_cursor: payload.next_cursor === null ? null : getInteger(payload.next_cursor, 'next_cursor'),
+    total_chars: getInteger(payload.total_chars, 'total_chars'),
+    content_sha256: getString(payload.content_sha256, 'content_sha256'),
     relative_path: sanitizeRelativePath(payload.relative_path),
   })
 }
@@ -612,6 +689,9 @@ function renderArtifactRead(value: ArtifactReadResult): string {
     `section: ${value.section}`,
     `content_type: ${value.content_type}`,
     `truncated: ${String(value.truncated)}`,
+    value.next_cursor != null ? `next_cursor: ${String(value.next_cursor)}` : '',
+    value.total_chars != null ? `total_chars: ${String(value.total_chars)}` : '',
+    value.content_sha256 ? `content_sha256: ${value.content_sha256}` : '',
     value.relative_path ? `relative_path: ${value.relative_path}` : '',
     '',
     value.content,
@@ -647,9 +727,24 @@ export async function readArtifact(args: unknown, options: CliBridgeOptions = {}
     artifact_id: normalized.artifact_id,
     section: normalized.section,
     max_chars: normalized.max_chars,
+    cursor: normalized.cursor,
   }
   const raw = await callResearchCli('artifact-read', request, options)
   return sanitizeArtifactReadResult(raw, normalized.max_chars)
+}
+
+export async function readOutcomeHistory(
+  args: unknown,
+  options: CliBridgeOptions = {},
+): Promise<OutcomeHistoryResult> {
+  const normalized = normalizeOutcomeHistoryArgs(args)
+  const raw = await callResearchCli('outcome-history', {
+    schema_version: '0.1',
+    market: 'CN',
+    evaluation_at: normalized.evaluation_at,
+    limit: normalized.limit,
+  }, options)
+  return sanitizeOutcomeHistoryResult(raw)
 }
 
 function registerResearchTool(ctx: Context) {
@@ -715,7 +810,7 @@ function registerResearchTool(ctx: Context) {
 function registerArtifactTool(ctx: Context) {
   return ctx.tools.register(defineTool({
     name: 'cn_artifact_read',
-    description: 'Read a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required; summary is only a bounded preview and must never be presented as the full report.',
+    description: 'Read one lossless page of a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required and every non-null next_cursor must be followed while content_sha256 remains stable; summary is only a bounded preview and must never be presented as the full report.',
     parameters: {
       artifact_id: {
         type: 'string',
@@ -724,12 +819,16 @@ function registerArtifactTool(ctx: Context) {
       },
       section: {
         type: 'string',
-        enum: ['summary', 'report', 'manifest', 'packet'],
-        description: 'Artifact section to read. Use report for the full Markdown research report; summary is only a compact machine-readable preview.',
+        enum: ['summary', 'report', 'manifest', 'packet', 'facts'],
+        description: 'Artifact section to read. Use report for the full Markdown research report, facts for the thesis-blind fact packet, and summary only for a compact preview.',
       },
       max_chars: {
         type: 'integer',
         description: `Maximum content length to request from the CLI, ${MIN_MAX_CHARS}-${MAX_MAX_CHARS}.`,
+      },
+      cursor: {
+        type: 'integer',
+        description: 'Zero-based character cursor returned as next_cursor by the prior page.',
       },
     },
     output: {
@@ -745,7 +844,36 @@ function registerArtifactTool(ctx: Context) {
   }))
 }
 
+function registerOutcomeHistoryTool(ctx: Context) {
+  return ctx.tools.register(defineTool({
+    name: 'cn_outcome_history',
+    description: 'Read immutable T+5/T+20 research-state scorecards available by evaluation_at. This is calibration memory, never a trading signal.',
+    parameters: {
+      evaluation_at: {
+        type: 'string',
+        required: true,
+        description: 'Timezone-aware availability cutoff for historical outcome memory.',
+      },
+      limit: {
+        type: 'integer',
+        description: 'Maximum prior runs, 1-20.',
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => [{
+        type: 'text',
+        text: JSON.stringify(value as OutcomeHistoryResult, null, 2).slice(0, 22000),
+      }],
+    },
+    async execute(args, exec) {
+      return readOutcomeHistory(args, { signal: exec.signal })
+    },
+  }))
+}
+
 export function apply(ctx: Context) {
   registerResearchTool(ctx)
   registerArtifactTool(ctx)
+  registerOutcomeHistoryTool(ctx)
 }

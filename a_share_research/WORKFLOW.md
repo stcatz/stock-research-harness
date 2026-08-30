@@ -105,6 +105,12 @@
 
 ### E. 独立风险审查
 
+canonical 引擎先生成不含 thesis、原反方和最终裁决的 `fact_packet.json`。联网 Harness 的独立反方只能
+分页读取这个 `facts` 区段，先输出结构化 JSON；第二个裁判调用才可看到原报告。反方证据必须带 URL、
+发布时间、可用时间和检索时间，网页中的指令一律作为不可信文本。没有独立调用时，报告中的
+`falsification_contract.status` 保持 `pending_independent_review`，不能把同一次生成中的反方栏位冒充
+独立证伪。
+
 对每个候选强制生成反方报告：
 
 - 催化是否已被价格反映？
@@ -141,12 +147,19 @@
 
 1. 每天冻结当日输入与输出，禁止事后改写。
 2. 分别统计政策、涨价、主线分支、突发和对标模式。
-3. 跟踪候选后 1、3、5、10 个交易日相对基准的收益、最大不利波动和最大有利波动。
+3. 以中证 800（`000906.SH`）为固定基准，回填 T+5/T+20 的候选收益、基准收益和超额收益。
 4. 同时统计被排除样本，避免幸存者偏差。
 5. 至少积累 30 至 50 个同类样本，再判断某一模式是否有正期望。
 
 评分只用于排序研究优先级，不代表上涨概率。
 
+outcome 进入独立 append-only sidecar，绝不改写原 run。汇总和 Harness 记忆必须按
+`available_at <= evaluation_at` 过滤；缺少到期观察时维持 `UNKNOWN/incomplete`。当前合约只衡量三种
+研究状态是否有区分度，不把结果包装成交易信号。最大不利/有利波动和 regime 分层尚未进入正式合约。
+
 ## 7. 自动化边界
 
-DeepSeek Harness 官方支持 Web 工作区和一次性 `headless` 任务；定时运行应由 `launchd` 或其他外部调度器调用。没有经过数据许可、回测和人工审批前，不应部署定时抓取，更不能连接券商交易接口。
+DeepSeek Harness 官方支持 Web 工作区和一次性 `headless` 任务；定时运行由 `launchd` 或其他外部
+调度器调用 `scripts/run_cn_harness_daily.sh`。该 wrapper 依次完成 snapshot 冻结、canonical run、跨快照
+drift audit、事实盲审反方和最终机会备忘录。联网发现的新线索不会自动进入 seed；必须先由 collector
+支持的正式来源核验并冻结。没有明确数据许可和人工复核时不得部署相应抓取，更不能连接券商交易接口。

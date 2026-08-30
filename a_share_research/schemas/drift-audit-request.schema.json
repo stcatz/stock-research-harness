@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/a-share-research/drift-audit-request.schema.json",
+  "title": "A-share snapshot drift audit request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "market", "before_snapshot_id", "after_snapshot_id"],
+  "properties": {
+    "schema_version": { "const": "0.1" },
+    "market": { "const": "CN" },
+    "before_snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "maxLength": 128
+    },
+    "after_snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "maxLength": 128
+    }
+  }
+}

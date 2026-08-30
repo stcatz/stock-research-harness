@@ -74,23 +74,40 @@ process.stdin.on('end', () => {
       }, 2);
       return;
     }
+    const fullContent = payload.section === 'report'
+      ? '# Report\\n' + 'x'.repeat(14000)
+      : JSON.stringify({
+          schema_version: '0.1',
+          market: 'CN',
+          artifact_id: payload.artifact_id,
+          section: payload.section ?? 'summary',
+          counts: { observe: 1, continue_research: 1, exclude: 0 }
+        }, null, 2);
+    const cursor = payload.cursor ?? 0;
+    const page = fullContent.slice(cursor, cursor + (payload.max_chars ?? 12000));
+    const nextCursor = cursor + page.length;
     finish(process.stdout, {
       schema_version: '0.1',
       market: 'CN',
       artifact_id: payload.artifact_id,
       section: payload.section ?? 'summary',
       content_type: payload.section === 'report' ? 'text/markdown' : 'application/json',
-      content: payload.section === 'report'
-        ? '# Report\\n' + 'x'.repeat(14000)
-        : JSON.stringify({
-            schema_version: '0.1',
-            market: 'CN',
-            artifact_id: payload.artifact_id,
-            section: payload.section ?? 'summary',
-            counts: { observe: 1, continue_research: 1, exclude: 0 }
-          }, null, 2),
-      truncated: false,
+      content: page,
+      truncated: nextCursor < fullContent.length,
+      cursor,
+      next_cursor: nextCursor < fullContent.length ? nextCursor : null,
+      total_chars: fullContent.length,
+      content_sha256: 'a'.repeat(64),
       relative_path: 'artifacts/runs/cn-2026-08-16-deadbeef/summary.json'
+    });
+    return;
+  }
+
+  if (command === 'outcome-history') {
+    finish(process.stdout, {
+      schema_version: '0.1', market: 'CN', evaluation_at: payload.evaluation_at,
+      benchmark_symbol: '000906.SH', run_count: 0, runs: [],
+      interpretation: 'calibration only'
     });
     return;
   }
@@ -118,7 +135,7 @@ process.stdin.on('end', () => {
     ],
     warnings: ['fixture only'],
     gaps: ['manual review required'],
-    available_sections: ['summary', 'report', 'manifest', 'packet'],
+    available_sections: ['summary', 'report', 'manifest', 'packet', 'facts'],
     manifest_hash: 'manifest-hash-demo'
   });
 });
@@ -128,7 +145,7 @@ process.stdin.on('end', () => {
   return pythonPath
 }
 
-test('apply registers both official tool names', () => {
+test('apply registers the three business-level tool names', () => {
   const registered = []
   apply({
     tools: {
@@ -140,7 +157,7 @@ test('apply registers both official tool names', () => {
 
   assert.deepEqual(
     registered.map((tool) => tool.name).sort(),
-    ['cn_artifact_read', 'cn_research_run'],
+    ['cn_artifact_read', 'cn_outcome_history', 'cn_research_run'],
   )
 })
 
@@ -250,7 +267,7 @@ test('runResearchWorkflow maps the new canonical request contract', async () => 
   assert.equal(result.artifact_id, 'cn-artifact-deadbeef1234')
   assert.equal(result.snapshot_id, 'snapshot-2026-08-15')
   assert.equal(result.focus[0].symbol, '000000')
-  assert.deepEqual(result.available_sections, ['summary', 'report', 'manifest', 'packet'])
+  assert.deepEqual(result.available_sections, ['summary', 'report', 'manifest', 'packet', 'facts'])
 
   const daily = await runResearchWorkflow(
     {
@@ -336,7 +353,8 @@ test('readArtifact uses artifact_id and preserves canonical CLI errors', async (
   assert.ok(!('error' in report))
   assert.equal(report.section, 'report')
   assert.equal(report.truncated, true)
-  assert.ok(report.content.includes('…[truncated]'))
+  assert.equal(report.content.length, 1000)
+  assert.equal(report.next_cursor, 1000)
 
   const missing = await readArtifact(
     { artifact_id: 'missing-artifact', section: 'summary', max_chars: 1000 },
@@ -432,7 +450,7 @@ test('sanitize helpers whitelist the new canonical CLI payloads', () => {
   assert.equal(run.artifact_id, 'cn-artifact-demo')
   assert.equal(run.secret_raw_blob, undefined)
 
-  const artifact = sanitizeArtifactReadResult({
+  assert.throws(() => sanitizeArtifactReadResult({
     schema_version: '0.1',
     market: 'CN',
     artifact_id: 'cn-artifact-demo',
@@ -441,12 +459,17 @@ test('sanitize helpers whitelist the new canonical CLI payloads', () => {
     content: 'x'.repeat(13000),
     truncated: false,
     relative_path: '../secret.txt',
-  }, 1000)
-  assert.ok(!('error' in artifact))
-  assert.equal(artifact.truncated, true)
-  assert.equal(artifact.relative_path, undefined)
-  assert.ok(artifact.content.length <= 1000)
-  assert.ok(artifact.content.endsWith('…[truncated]'))
+  }, 1000), /exceeded the requested max_chars/)
+
+  assert.throws(() => sanitizeArtifactReadResult({
+    schema_version: '0.1',
+    market: 'CN',
+    artifact_id: 'cn-artifact-demo',
+    section: 'report',
+    content_type: 'text/markdown',
+    content: 'token=top-secret',
+    truncated: false,
+  }, 1000), /safety boundary/)
 
   assert.throws(
     () => sanitizeResearchRunResult({ schema_version: '0.1', market: 'US' }),
@@ -488,10 +511,11 @@ test('sanitize helpers omit absent optional fields and remain lossless JSON', ()
     artifact_id: 'cn-artifact-demo',
     section: 'summary',
     content_type: 'application/json',
-    content: '{"ok":true}',
+    content: ' \n{"ok":true}\n ',
     truncated: false,
   }, 1000)
   assert.ok(!('error' in artifact))
+  assert.equal(artifact.content, ' \n{"ok":true}\n ')
   assert.deepEqual(artifact, jsonRoundTrip(artifact))
   assert.equal('relative_path' in artifact, false)
 })

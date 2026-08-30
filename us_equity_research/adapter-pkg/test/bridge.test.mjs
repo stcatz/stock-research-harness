@@ -73,20 +73,37 @@ process.stdin.on('end', async () => {
       return;
     }
     if (payload.artifact_id === 'raw-error') {
-      process.stderr.write('traceback at /Users/demo/private.py with sk-abcdefghijklmnopqrstuvwxyz');
+      process.stderr.write('traceback at /Users/demo/private.py with test-secret-placeholder');
       process.exitCode = 2;
       return;
     }
+    const fullContent = '# FIXTURE report\\n' + 'x'.repeat(24000);
+    const cursor = payload.cursor ?? 0;
+    const page = fullContent.slice(cursor, cursor + (payload.max_chars ?? 12000));
+    const nextCursor = cursor + page.length;
     finish(process.stdout, {
       schema_version: '0.1', market: 'US', artifact_id: payload.artifact_id,
       section: payload.section ?? 'summary',
       content_type: payload.section === 'report' ? 'text/markdown' : 'application/json',
-      content: '# FIXTURE report\\n/private/demo/secret token=top-secret ' + 'x'.repeat(24000),
-      truncated: false,
+      content: page,
+      truncated: nextCursor < fullContent.length,
+      cursor,
+      next_cursor: nextCursor < fullContent.length ? nextCursor : null,
+      total_chars: fullContent.length,
+      content_sha256: 'b'.repeat(64),
       relative_path: payload.artifact_id === 'unsafe-path'
         ? '../private/report.md'
         : 'artifacts/us/runs/us-run-demo/report.md',
       raw_provider_payload: 'must be dropped'
+    });
+    return;
+  }
+
+  if (command === 'outcome-history') {
+    finish(process.stdout, {
+      schema_version: '0.1', market: 'US', evaluation_at: payload.evaluation_at,
+      benchmark_symbol: 'SPY', run_count: 0, runs: [],
+      interpretation: 'calibration only'
     });
     return;
   }
@@ -110,7 +127,7 @@ process.stdin.on('end', async () => {
       reason: 'fixture only', private_path: '/Users/demo/private'
     }],
     warnings: ['fixture only'], gaps: payload.subject === 'partial-case' ? ['UNKNOWN'] : [],
-    available_sections: ['summary', 'report', 'manifest', 'packet'],
+    available_sections: ['summary', 'report', 'manifest', 'packet', 'facts'],
     raw_provider_payload: 'must be dropped'
   });
 });
@@ -139,7 +156,7 @@ function canonicalRun(overrides = {}) {
     focus: [{ symbol: 'DEMOA', name: 'Synthetic Alpha', decision: 'observe' }],
     warnings: [],
     gaps: [],
-    available_sections: ['summary', 'report', 'manifest', 'packet'],
+    available_sections: ['summary', 'report', 'manifest', 'packet', 'facts'],
     ...overrides,
   }
 }
@@ -195,19 +212,20 @@ test('platform guard rejects non-Unix runtimes before spawning Python', async ()
   }), /supports only macOS and Linux/)
 })
 
-test('source statically defines exactly two model-facing tools', async () => {
+test('source statically defines exactly three model-facing tools', async () => {
   const source = await readFile(join(packageRoot, 'src', 'index.ts'), 'utf8')
-  assert.equal((source.match(/defineTool\s*\(\s*\{/g) ?? []).length, 2)
+  assert.equal((source.match(/defineTool\s*\(\s*\{/g) ?? []).length, 3)
   assert.equal(source.includes("from '@deepseek-ai/dsh-tools'"), true)
   assert.equal(source.includes("from '@deepseek-ai/dsh'"), false)
   assert.doesNotMatch(source, /\b(?:fetch|axios|sqlite|broker|order)\s*\(/i)
 })
 
-test('apply registers exactly the two US tool names', () => {
+test('apply registers exactly the three US tool names', () => {
   const registered = []
   apply({ tools: { register(tool) { registered.push(tool) } } })
   assert.deepEqual(registered.map((tool) => tool.name).sort(), [
     'us_artifact_read',
+    'us_outcome_history',
     'us_research_run',
   ])
 })
@@ -339,7 +357,7 @@ test('run and artifact outputs enforce the US/schema handshake', () => {
   }), /market handshake failed/)
 })
 
-test('sanitizers whitelist, redact paths and secrets, and bound model-visible output', () => {
+test('sanitizers whitelist run output and fail closed on unsafe artifact content', () => {
   const run = sanitizeResearchRunResult(canonicalRun({
     status: 'partial', pit_quality: 'UNKNOWN',
     warnings: [
@@ -359,19 +377,18 @@ test('sanitizers whitelist, redact paths and secrets, and bound model-visible ou
   assert.ok(run.warnings.length <= 5)
   assert.doesNotMatch(JSON.stringify(run), /Users|home\/alice|super-secret|abcdefghijklmnop/)
 
-  const artifact = sanitizeArtifactReadResult({
+  assert.throws(() => sanitizeArtifactReadResult({
     schema_version: '0.1', market: 'US', artifact_id: 'us-artifact-demo',
     section: 'report', content_type: 'text/markdown',
     content: '# Report\n/private/alice/secret\n/etc/private/config\ntoken=top-secret\n' + 'x'.repeat(30000),
     truncated: false, relative_path: '../private/report.md', raw_provider_payload: 'drop-me',
-  }, 1000)
-  assert.equal(artifact.relative_path, undefined)
-  assert.equal(artifact.raw_provider_payload, undefined)
-  assert.equal(artifact.truncated, true)
-  assert.ok(artifact.content.length <= 1000)
-  assert.ok(artifact.content.endsWith('…[truncated]'))
-  assert.match(artifact.content, /^# Report\n/)
-  assert.doesNotMatch(artifact.content, /private\/alice|etc\/private|top-secret/)
+  }, 1000), /exceeded the requested max_chars/)
+
+  assert.throws(() => sanitizeArtifactReadResult({
+    schema_version: '0.1', market: 'US', artifact_id: 'us-artifact-demo',
+    section: 'report', content_type: 'text/markdown',
+    content: '# Report\ntoken=top-secret', truncated: false,
+  }, 1000), /safety boundary/)
 })
 
 test('structured run output preserves all 20 public focus items', () => {
@@ -398,7 +415,7 @@ test('successful run and artifact outputs stay lossless JSON when optional field
     artifact_id: 'us-artifact-demo',
     section: 'summary',
     content_type: 'application/json',
-    content: '{"ok":true}',
+    content: ' \n{"ok":true}\n ',
     truncated: false,
     relative_path: '../unsafe/report.md',
   })
@@ -409,6 +426,7 @@ test('successful run and artifact outputs stay lossless JSON when optional field
   assert.equal(Object.hasOwn(run.focus[0], 'reason'), false)
   assert.equal(Object.hasOwn(run, 'reused'), false)
   assert.equal(Object.hasOwn(artifact, 'relative_path'), false)
+  assert.equal(artifact.content, ' \n{"ok":true}\n ')
   assertLosslessJson(run)
   assertLosslessJson(artifact)
 })
@@ -451,8 +469,9 @@ test('artifact reads retain only safe relative paths and bounded content', async
   await writeFakePython(projectRoot)
   const safe = await readArtifact({ artifact_id: 'us-artifact-demo', section: 'report', max_chars: 700 }, { projectRoot })
   assert.equal(safe.relative_path, 'artifacts/us/runs/us-run-demo/report.md')
-  assert.ok(safe.content.length <= 700)
+  assert.equal(safe.content.length, 700)
   assert.equal(safe.truncated, true)
+  assert.equal(safe.next_cursor, 700)
 
   const unsafe = await readArtifact({ artifact_id: 'unsafe-path', section: 'report', max_chars: 700 }, { projectRoot })
   assert.equal(unsafe.relative_path, undefined)

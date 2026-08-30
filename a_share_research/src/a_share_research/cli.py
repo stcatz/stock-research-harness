@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .core.contracts import SCHEMA_VERSION, ContractError
+from .core.drift import audit_snapshot_drift
+from .core.outcomes import record_outcome, summarize_outcome_history, summarize_outcomes
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.storage import initialize_workspace
 from .ingest import collect_cn_snapshot, probe_hithink_provider
@@ -37,6 +39,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     read_parser = subparsers.add_parser("artifact-read", help="Read a bounded artifact section")
     read_parser.add_argument(
+        "--request-json",
+        required=True,
+        help="JSON file path or '-' to read exactly one JSON object from stdin",
+    )
+
+    for command, help_text in (
+        ("outcome-record", "Append one immutable future outcome observation"),
+        ("outcome-summary", "Summarize only outcomes available by evaluation_at"),
+        ("outcome-history", "Read prior outcome scorecards available by evaluation_at"),
+    ):
+        outcome_parser = subparsers.add_parser(command, help=help_text)
+        outcome_parser.add_argument(
+            "--request-json",
+            required=True,
+            help="JSON file path or '-' to read exactly one JSON object from stdin",
+        )
+
+    drift_parser = subparsers.add_parser(
+        "audit-drift",
+        help="Compare two frozen snapshots and persist an immutable drift receipt",
+    )
+    drift_parser.add_argument(
         "--request-json",
         required=True,
         help="JSON file path or '-' to read exactly one JSON object from stdin",
@@ -104,6 +128,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = run_research(_read_json(args.request_json), workspace)
         elif args.command == "artifact-read":
             result = read_artifact(_read_json(args.request_json), workspace)
+        elif args.command == "outcome-record":
+            result = record_outcome(_read_json(args.request_json), workspace)
+        elif args.command == "outcome-summary":
+            result = summarize_outcomes(_read_json(args.request_json), workspace)
+        elif args.command == "outcome-history":
+            result = summarize_outcome_history(_read_json(args.request_json), workspace)
+        elif args.command == "audit-drift":
+            result = audit_snapshot_drift(_read_json(args.request_json), workspace)
         elif args.command == "collect-snapshot":
             collected = collect_cn_snapshot(
                 _read_json(args.seed_json),

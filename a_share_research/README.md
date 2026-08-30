@@ -1,4 +1,4 @@
-# A 股题材研究引擎 v0.1
+# A 股题材研究引擎（方法 v1.1）
 
 这个项目把题材研究流程变成可重复的 `Snapshot -> Evidence Gates -> ResearchPacket -> Report` 管线。Python 引擎是正式 artifact 的唯一作者；DeepSeek Harness 只负责自然语言入口、触发工具和读取已生成的 artifact。
 
@@ -11,8 +11,14 @@
 - 反方解释、证伪条件、下一催化、数据缺口和人工复核项；
 - SQLite 运行索引与包含排除样本的决策记录；
 - 不可变 run 目录、文件哈希和稳定 manifest hash；
+- 硬门槛与软优先级分离的 `research_priority`，以及结构化 `research_gaps`；
+- 不含正反 thesis 和最终裁决的 `fact_packet.json`，供真正独立的反方审查；
+- 横截面估值分位；行业与历史分位在缺少 PIT 可比集时明确为 `UNKNOWN`；
+- T+5/T+20 相对中证 800 的不可变 outcome sidecar 和按可用时间过滤的历史校准；
+- 跨冻结快照的供应商历史事实漂移审计；
+- 可无损拼接并校验整段哈希的 artifact 分页读取；
 - Markdown/JSON 报告；
-- DeepSeek Harness 原生 Cordis 工具适配器；
+- DeepSeek Harness 原生 Cordis 工具适配器和显式联网的每日研究 Harness；
 - 无券商、账户、订单或自动交易能力。
 
 ## 安装与测试
@@ -117,9 +123,44 @@ printf '%s' '{
 printf '%s' '{
   "artifact_id": "cn-artifact-...",
   "section": "report",
-  "max_chars": 12000
+  "max_chars": 12000,
+  "cursor": 0
 }' | uv run a-share-research artifact-read --request-json -
 ```
+
+可读区段为 `summary`、`report`、`manifest`、`packet` 和 `facts`。`facts` 是独立反方专用的
+thesis-blind 事实包。返回值包含 `next_cursor`、`total_chars` 和 `content_sha256`；只要
+`next_cursor` 非空，就把它作为下一次 `cursor`，最终按顺序拼接并确认所有页的总长度与哈希一致。
+单页结果不能冒充完整报告。
+
+结果回填不会改写历史 artifact。下面示例记录 T+5 相对中证 800 的观察，并在一个明确的评估时点
+汇总；收益率使用小数，例如 `0.031` 表示 3.1%：
+
+```bash
+printf '%s' '{
+  "schema_version":"0.1", "market":"CN", "run_id":"cn-...",
+  "candidate_id":"theme-id:CN.SH.600000", "symbol":"600000.SH",
+  "horizon_trading_days":5,
+  "observed_at":"2026-08-24T15:00:00+08:00",
+  "available_at":"2026-08-24T15:05:00+08:00",
+  "candidate_return":0.031, "benchmark_return":0.012,
+  "benchmark_symbol":"000906.SH",
+  "source_url":"https://licensed-provider.example/receipt/123",
+  "source_document_id":"provider-receipt-123"
+}' | uv run a-share-research outcome-record --request-json -
+
+printf '%s' '{
+  "schema_version":"0.1", "market":"CN", "run_id":"cn-run-...",
+  "evaluation_at":"2026-08-24T16:00:00+08:00"
+}' | uv run a-share-research outcome-summary --request-json -
+```
+
+`candidate_id` 在 symbol 于本次运行中唯一时可以省略；同一股票跨多个题材出现时必须显式提供，
+否则命令拒绝回填，避免把结果记到错误的题材判断上。
+
+`outcome-history` 只返回 `available_at <= evaluation_at` 的旧观察。`audit-drift` 接受显式的
+`before_snapshot_id` 和 `after_snapshot_id`，比较相同实体、指标和观察期的历史值，并把不可变 receipt
+写入 `data/audit/cn/provider-drift/`。
 
 CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定。DSH 工具结果只返回相对路径、短摘要和 opaque ID。
 
@@ -186,9 +227,10 @@ HiThink 模式会采集：
 
 HiThink 没有公开不可变 first-seen/vintage 契约，最新估值也不能冒充历史估值。因此即使启用原始响应审计，快照仍是 `RECONSTRUCTED_NON_PIT`，不能用于宣称严格历史 PIT 回放。
 
-## 每日完整报告与 macOS 调度
+## 每日 canonical 报告与 macOS 调度
 
-仓库根目录的 wrapper 会严格按“采集真实快照 → 使用显式 snapshot ID 运行 → 读取完整 report artifact”执行，不依赖 DSH，也不会退回 demo：
+仓库根目录的 wrapper 会严格按“采集真实快照 → 使用显式 snapshot ID 运行 → 读取第一份可校验的
+report 分页”执行，不依赖 DSH，也不会退回 demo：
 
 ```bash
 bash ~/ai/stock/scripts/run_cn_daily.sh \
@@ -211,17 +253,47 @@ bash ~/ai/stock/scripts/install_cn_launchd.sh \
 
 wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decision_at` 早于实际抓取时间，会在研究运行前失败。`--provider hithink` 时，调用环境必须已经包含 `HITHINK_FINANCE_API_KEY`。macOS LaunchAgent 不读取 `~/.zshrc`，安装器也不会把 Key 写进 plist；应由你自己的 Keychain/登录会话秘密注入机制把该变量提供给 launchd，否则任务会安全失败。日志写入 `<root>/.runtime/logs/`。日报调度属于研究引擎，关闭 DSH 后仍会继续运行。
 
+### 显式联网的机会发现 Harness
+
+联网模型不放进离线 `run`。`run_cn_harness_daily.sh` 先执行上述 canonical 流程，再做两次隔离调用：
+
+1. 反方只可分页读取 `facts`，看不到 bull thesis、原反方或最终决策；
+2. 裁判分页读取报告，加载当时已可用的 outcome history，把第一步 JSON 当作不可信输入，并可联网查询
+   `decision_at` 之前的一手来源。
+
+```bash
+bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
+  --root ~/ai/stock \
+  --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
+  --provider hithink \
+  --dsh-bin "$(command -v dsh)" \
+  --profile headless
+```
+
+联网输出写入 `.runtime/harness/cn/<snapshot_id>/`，不会改写 canonical artifact；其中
+`harness-manifest.json` 固定代码版本、prompt 模板和结果哈希。模型新发现的主题或标的
+只能标为“尚未冻结 / `continue_research`”，经官方来源核验并进入下一份 snapshot 后才可参与正式门槛。
+工作日 20:45 的模板位于
+`scripts/launchd/com.stcatz.stock-research.cn-harness-daily.plist.example`；模板不包含 API Key，安装前必须
+替换绝对路径并通过受控的秘密注入机制提供 collector 所需凭据。
+
 ## DeepSeek Harness
 
-插件位于 `adapter-pkg/`，只注册：
+插件位于 `adapter-pkg/`，只注册三个业务级只读/研究工具：
 
 - `cn_research_run`
 - `cn_artifact_read`
+- `cn_outcome_history`
 
 插件不连接数据商、不读取 SQLite、不进行财务计算、不调用券商。开发时可用 `--patch` 临时挂载；验证稳定后再作为独立 bundle 安装。具体命令见 `adapter-pkg/README.md`。
 
 ## 当前边界
 
-`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值和年度三表，但仍不提供官方公告抓取、严格 PIT、自动主题发现或数据再分发授权。上游根仓库有 MIT LICENSE，但其 Python 子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。任何代码许可证都不自动授予数据的商业使用或再分发权。
+`run`、`artifact-read` 和三个 DSH 业务工具仍是离线的；联网只发生在显式 collector/provider probe
+以及独立的 Harness 模型会话中。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场
+宽度、特色池、估值和年度三表，但仍不提供官方公告自动冻结、严格 PIT 或数据再分发授权。Harness
+能够发现线索，却不会把网页内容自动提升为 canonical 事实。上游根仓库有 MIT LICENSE，但其 Python
+子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。
+任何代码许可证都不自动授予数据的商业使用或再分发权。
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。

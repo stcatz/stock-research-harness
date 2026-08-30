@@ -9,7 +9,7 @@ export const inject = ['tools']
 
 export type ResearchWorkflow = 'daily_report' | 'theme_research' | 'stock_research'
 type SnapshotSelector = 'demo' | 'latest' | 'id'
-type ArtifactSection = 'summary' | 'report' | 'manifest' | 'packet'
+type ArtifactSection = 'summary' | 'report' | 'manifest' | 'packet' | 'facts'
 type JsonObject = Record<string, unknown>
 
 export type Context = {
@@ -34,6 +34,12 @@ export type ArtifactReadArgs = {
   artifact_id: string
   section?: ArtifactSection
   max_chars?: number
+  cursor?: number
+}
+
+export type OutcomeHistoryArgs = {
+  evaluation_at: string
+  limit?: number
 }
 
 type CliBridgeOptions = {
@@ -91,6 +97,10 @@ type ArtifactReadSuccessResult = {
   content_type: string
   content: string
   truncated: boolean
+  cursor?: number
+  next_cursor?: number | null
+  total_chars?: number
+  content_sha256?: string
   relative_path?: string
 }
 
@@ -103,6 +113,7 @@ type CliErrorResult = {
 
 export type ResearchRunResult = RunSuccessResult | CliErrorResult
 export type ArtifactReadResult = ArtifactReadSuccessResult | CliErrorResult
+export type OutcomeHistoryResult = JsonObject | CliErrorResult
 
 const SCHEMA_VERSION = '0.1' as const
 const MARKET = 'US' as const
@@ -131,7 +142,13 @@ const CHILD_ENV_ALLOWLIST = [
 ] as const
 const WORKFLOWS = new Set<ResearchWorkflow>(['daily_report', 'theme_research', 'stock_research'])
 const SNAPSHOT_SELECTORS = new Set<SnapshotSelector>(['demo', 'latest', 'id'])
-const ARTIFACT_SECTIONS = new Set<ArtifactSection>(['summary', 'report', 'manifest', 'packet'])
+const ARTIFACT_SECTIONS = new Set<ArtifactSection>([
+  'summary',
+  'report',
+  'manifest',
+  'packet',
+  'facts',
+])
 const SAFE_IDENTIFIER = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,128}$/
 const US_SYMBOL = /^[A-Z][A-Z0-9.-]{0,14}$/
 
@@ -348,17 +365,37 @@ function normalizeRunArgs(args: unknown): ResearchRunArgs {
 
 function normalizeArtifactReadArgs(args: unknown): Required<ArtifactReadArgs> {
   const raw = ensurePlainObject(args, 'us_artifact_read arguments')
-  rejectUnknownFields(raw, ['artifact_id', 'section', 'max_chars'], 'us_artifact_read arguments')
+  rejectUnknownFields(
+    raw,
+    ['artifact_id', 'section', 'max_chars', 'cursor'],
+    'us_artifact_read arguments',
+  )
   const artifactId = validateIdentifier(raw.artifact_id, 'artifact_id')
   const sectionRaw = raw.section == null ? 'summary' : requireInputString(raw.section, 'section')
   if (!ARTIFACT_SECTIONS.has(sectionRaw as ArtifactSection)) {
-    throw new Error('section must be summary, report, manifest, or packet')
+    throw new Error('section must be summary, report, manifest, packet, or facts')
+  }
+  const cursor = getInteger(raw.cursor, 'cursor') ?? 0
+  if (cursor < 0 || cursor > 10000000) {
+    throw new Error('cursor must be an integer between 0 and 10000000')
   }
   return {
     artifact_id: artifactId,
     section: sectionRaw as ArtifactSection,
     max_chars: normalizeMaxChars(raw.max_chars),
+    cursor,
   }
+}
+
+function normalizeOutcomeHistoryArgs(args: unknown): Required<OutcomeHistoryArgs> {
+  const raw = ensurePlainObject(args, 'us_outcome_history arguments')
+  rejectUnknownFields(raw, ['evaluation_at', 'limit'], 'us_outcome_history arguments')
+  const evaluationAt = validateDecisionAt(raw.evaluation_at)
+  const limit = getInteger(raw.limit, 'limit') ?? 10
+  if (limit < 1 || limit > 20) {
+    throw new Error('limit must be an integer between 1 and 20')
+  }
+  return { evaluation_at: evaluationAt, limit }
 }
 
 function redactSensitiveText(value: string, compact = false): string {
@@ -501,6 +538,29 @@ function sanitizeRelativePath(value: unknown): string | undefined {
   const parts = value.split('/')
   if (parts.some((part) => !part || part === '.' || part === '..' || !/^[A-Za-z0-9._-]+$/.test(part))) {
     return undefined
+  }
+  return value
+}
+
+function requireSafeArtifactContent(value: unknown, maxChars: number): string {
+  if (typeof value !== 'string') {
+    throw new Error('artifact content must be a string')
+  }
+  if (value.length > maxChars) {
+    throw new Error('CLI artifact content exceeded the requested max_chars contract')
+  }
+  const containsSecret = (
+    /\bBearer\s+[A-Za-z0-9._~+/=-]+/i.test(value)
+    || /\b(api[_-]?key|access[_-]?token|authorization|password|secret|token)\b\s*[:=]\s*[^\s,;]+/i.test(value)
+    || /\bsk-[A-Za-z0-9_-]{8,}\b/.test(value)
+  )
+  const containsAbsolutePath = (
+    /(?:^|[\s("'`])\/(?:Users|home|private|tmp|var|opt|Volumes|etc)\/[^\s"'`<>()]+/m.test(value)
+    || /[A-Za-z]:\\[^\s"'`<>()]+/.test(value)
+    || /\\\\[^\s\\]+\\[^\s"'`<>()]+/.test(value)
+  )
+  if (containsSecret || containsAbsolutePath) {
+    throw new Error('canonical artifact content violated the model-visible safety boundary')
   }
   return value
 }
@@ -661,7 +721,7 @@ async function spawnBounded(
 }
 
 export async function callResearchCli(
-  command: 'run' | 'artifact-read',
+  command: 'run' | 'artifact-read' | 'outcome-history',
   request: JsonObject,
   options: CliBridgeOptions = {},
 ): Promise<unknown> {
@@ -703,6 +763,28 @@ export async function callResearchCli(
     return stdoutValue
   }
   throw new Error(`us_equity_research CLI returned invalid JSON for ${command}`)
+}
+
+function sanitizeBoundedJson(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value == null || typeof value === 'boolean') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') return redactSensitiveText(value, true).slice(0, 2000)
+  if (Array.isArray(value)) return value.slice(0, 200).map((item) => sanitizeBoundedJson(item, depth + 1))
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as JsonObject)
+      .filter(([key]) => !/(?:secret|token|password|credential|api[_-]?key)/i.test(key))
+      .slice(0, 100)
+      .map(([key, item]) => [key, sanitizeBoundedJson(item, depth + 1)])
+    return Object.fromEntries(entries)
+  }
+  return undefined
+}
+
+export function sanitizeOutcomeHistoryResult(raw: unknown): OutcomeHistoryResult {
+  const payload = ensurePlainObject(raw, 'outcome history result')
+  if (payload.error != null) return sanitizeCliError(payload)
+  assertHandshake(payload, 'CLI outcome history result')
+  return sanitizeBoundedJson(payload) as JsonObject
 }
 
 export function sanitizeResearchRunResult(raw: unknown): ResearchRunResult {
@@ -757,15 +839,7 @@ export function sanitizeArtifactReadResult(
     throw new Error('CLI artifact result returned an unsupported section')
   }
   const normalizedMaxChars = normalizeMaxChars(maxChars)
-  if (typeof payload.content !== 'string') {
-    throw new Error('content must be a string')
-  }
-  const sanitizedContent = redactSensitiveText(payload.content)
-  const marker = '\n…[truncated]'
-  const wasCapped = sanitizedContent.length > normalizedMaxChars
-  const content = wasCapped
-    ? `${sanitizedContent.slice(0, Math.max(0, normalizedMaxChars - marker.length))}${marker}`
-    : sanitizedContent
+  const content = requireSafeArtifactContent(payload.content, normalizedMaxChars)
   const result: ArtifactReadResult = {
     schema_version: SCHEMA_VERSION,
     market: MARKET,
@@ -773,11 +847,34 @@ export function sanitizeArtifactReadResult(
     section,
     content_type: boundedVisibleText(payload.content_type, 'content_type', 80),
     content,
-    truncated: Boolean(getBoolean(payload.truncated, 'truncated') || wasCapped),
+    truncated: Boolean(getBoolean(payload.truncated, 'truncated')),
   }
   const relativePath = sanitizeRelativePath(payload.relative_path)
   if (relativePath !== undefined) {
     result.relative_path = relativePath
+  }
+  const cursor = getInteger(payload.cursor, 'cursor')
+  if (cursor !== undefined) {
+    result.cursor = cursor
+  }
+  if (payload.next_cursor === null) {
+    result.next_cursor = null
+  } else {
+    const nextCursor = getInteger(payload.next_cursor, 'next_cursor')
+    if (nextCursor !== undefined) {
+      result.next_cursor = nextCursor
+    }
+  }
+  const totalChars = getInteger(payload.total_chars, 'total_chars')
+  if (totalChars !== undefined) {
+    result.total_chars = totalChars
+  }
+  if (payload.content_sha256 !== undefined) {
+    result.content_sha256 = boundedVisibleText(
+      payload.content_sha256,
+      'content_sha256',
+      64,
+    )
   }
   return result
 }
@@ -834,6 +931,9 @@ function renderArtifactRead(value: ArtifactReadResult): string {
     `section: ${value.section}`,
     `content_type: ${value.content_type}`,
     `truncated: ${String(value.truncated)}`,
+    value.next_cursor != null ? `next_cursor: ${String(value.next_cursor)}` : '',
+    value.total_chars != null ? `total_chars: ${String(value.total_chars)}` : '',
+    value.content_sha256 ? `content_sha256: ${value.content_sha256}` : '',
     value.relative_path ? `relative_path: ${value.relative_path}` : '',
     '',
     value.content,
@@ -873,9 +973,24 @@ export async function readArtifact(
     artifact_id: normalized.artifact_id,
     section: normalized.section,
     max_chars: normalized.max_chars,
+    cursor: normalized.cursor,
   }
   const raw = await callResearchCli('artifact-read', request, options)
   return sanitizeArtifactReadResult(raw, normalized.max_chars)
+}
+
+export async function readOutcomeHistory(
+  args: unknown,
+  options: CliBridgeOptions = {},
+): Promise<OutcomeHistoryResult> {
+  const normalized = normalizeOutcomeHistoryArgs(args)
+  const raw = await callResearchCli('outcome-history', {
+    schema_version: SCHEMA_VERSION,
+    market: MARKET,
+    evaluation_at: normalized.evaluation_at,
+    limit: normalized.limit,
+  }, options)
+  return sanitizeOutcomeHistoryResult(raw)
 }
 
 const researchTool = defineTool({
@@ -938,7 +1053,7 @@ const researchTool = defineTool({
 
 const artifactTool = defineTool({
   name: 'us_artifact_read',
-  description: 'Read a bounded canonical US research artifact section by opaque artifact ID. When the user asks for a full or complete research report, section=report is required; summary is only a bounded preview and must never be presented as the full report.',
+  description: 'Read one lossless page of a canonical US research artifact section by opaque artifact ID. When the user asks for a full or complete research report, section=report is required and every non-null next_cursor must be followed while content_sha256 remains stable; summary is only a bounded preview and must never be presented as the full report.',
   parameters: {
     artifact_id: {
       type: 'string',
@@ -947,12 +1062,16 @@ const artifactTool = defineTool({
     },
     section: {
       type: 'string',
-      enum: ['summary', 'report', 'manifest', 'packet'],
-      description: 'Predefined artifact section to read. Use report for the full Markdown research report; summary is only a compact machine-readable preview.',
+      enum: ['summary', 'report', 'manifest', 'packet', 'facts'],
+      description: 'Predefined section. Use report for the full Markdown research report, facts for the thesis-blind fact packet, and summary only for a compact preview.',
     },
     max_chars: {
       type: 'integer',
       description: `Maximum visible content length, ${MIN_MAX_CHARS}-${MAX_MAX_CHARS}.`,
+    },
+    cursor: {
+      type: 'integer',
+      description: 'Zero-based character cursor returned as next_cursor by the prior page.',
     },
   },
   output: {
@@ -967,7 +1086,34 @@ const artifactTool = defineTool({
   },
 })
 
+const outcomeHistoryTool = defineTool({
+  name: 'us_outcome_history',
+  description: 'Read immutable T+5/T+20 research-state scorecards available by evaluation_at. This is calibration memory, never a trading signal.',
+  parameters: {
+    evaluation_at: {
+      type: 'string',
+      required: true,
+      description: 'Timezone-aware availability cutoff for historical outcome memory.',
+    },
+    limit: {
+      type: 'integer',
+      description: 'Maximum prior runs, 1-20.',
+    },
+  },
+  output: {
+    schema: { type: 'object', additionalProperties: true },
+    render: (_args, value) => [{
+      type: 'text',
+      text: JSON.stringify(value as OutcomeHistoryResult, null, 2).slice(0, MAX_RENDER_CHARS),
+    }],
+  },
+  async execute(args, exec) {
+    return readOutcomeHistory(args, { signal: exec.signal })
+  },
+})
+
 export function apply(ctx: Context): void {
   ctx.tools.register(researchTool)
   ctx.tools.register(artifactTool)
+  ctx.tools.register(outcomeHistoryTool)
 }
