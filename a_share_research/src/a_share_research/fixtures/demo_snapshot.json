@@ -52,7 +52,14 @@
       "available_at": "2026-08-15T19:00:00+08:00",
       "retrieved_at": "2026-08-16T07:12:00+08:00",
       "as_of": "2026-08-15T19:00:00+08:00",
-      "summary": "合成公告样本称公司甲获得一个可核验的示范项目。"
+      "summary": "合成公告样本称公司甲获得一个6亿元示范项目，合成历史收入为10亿元。",
+      "document": {
+        "source_document_id": "DEMO-COMPANY-ANNOUNCEMENT-001",
+        "media_type": "application/pdf",
+        "extraction_method": "pdf_text_layer",
+        "text": "本合成公告仅用于验证原文冻结、哈希和分页读取，不代表真实公司事实；合成项目金额6亿元，合成历史收入10亿元。",
+        "text_sha256": "d867629402f338f5c31044ae1c9532181ec100121b7180f47b3dbd55d61b1f28"
+      }
     },
     {
       "evidence_id": "EV-INDUSTRY-001",
@@ -149,6 +156,65 @@
           "role": "core",
           "thesis": "合成公告与合成板块数据构成双重验证，仅用于测试观察流程。",
           "counter_thesis": "示范项目规模可能不足以影响财务结果。",
+          "opportunity_profile": {
+            "new_information": {
+              "assessment": "medium",
+              "reason": "合成政策与公司项目公告在研究时点前新增可用。",
+              "evidence_refs": ["EV-POLICY-001", "EV-COMPANY-001"]
+            },
+            "economic_impact": {
+              "assessment": "medium",
+              "reason": "合成项目金额相当于合成历史收入的60%，利润弹性仍未知。",
+              "evidence_refs": ["EV-COMPANY-001", "EV-INDUSTRY-001"],
+              "magnitude": {
+                "status": "quantified",
+                "basis": "revenue",
+                "numerator": "6",
+                "denominator": "10",
+                "ratio": "0.6",
+                "formula": "合成项目金额6亿元 / 合成历史收入10亿元"
+              }
+            },
+            "expectation_gap": {
+              "assessment": "positive",
+              "baseline": "historical",
+              "reason": "合成项目公告相对既有产业交付样本构成新增验证。",
+              "evidence_refs": ["EV-COMPANY-001", "EV-INDUSTRY-001"]
+            },
+            "market_pricing": {
+              "assessment": "confirmed",
+              "reason": "合成结构化行情显示不止单一标的同步确认。",
+              "evidence_refs": ["EV-MARKET-001"]
+            },
+            "next_catalyst": {
+              "description": "合成示范项目节点",
+              "scheduled_at": "2026-08-20T09:00:00+08:00",
+              "verification_rule": "核验官方项目进度与公司交付披露是否同时出现。",
+              "evidence_refs": ["EV-POLICY-001"]
+            }
+          },
+          "impact_chain": [
+            {
+              "step": "正式政策扩大合成示范范围",
+              "status": "supported",
+              "evidence_refs": ["EV-POLICY-001"]
+            },
+            {
+              "step": "示范范围带来设施需求",
+              "status": "supported",
+              "evidence_refs": ["EV-POLICY-001", "EV-INDUSTRY-001"]
+            },
+            {
+              "step": "公司项目公告映射设备交付",
+              "status": "supported",
+              "evidence_refs": ["EV-COMPANY-001"]
+            },
+            {
+              "step": "交付转化为利润影响",
+              "status": "partial",
+              "evidence_refs": ["EV-COMPANY-001"]
+            }
+          ],
           "evidence_refs": ["EV-POLICY-001", "EV-COMPANY-001", "EV-INDUSTRY-001"],
           "market_evidence_refs": ["EV-MARKET-001"],
           "invalidation_conditions": ["正式公告无法支持项目与主营业务关联"],

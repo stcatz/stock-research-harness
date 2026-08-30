@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
+from a_share_research.core.pipeline import run_research
 from a_share_research.core.snapshot import validate_snapshot
 from a_share_research.ingest import (
     BENCHMARK_SYMBOLS,
@@ -180,8 +181,31 @@ class SnapshotBuilderTests(unittest.TestCase):
         self.assertEqual(candidate["market_evidence_refs"], [market_ref])
         evidence = {item["evidence_id"]: item for item in raw["evidence"]}
         self.assertEqual(evidence[market_ref]["source_level"], "structured_market")
-        self.assertEqual(len(raw["market_context"]["evidence_refs"]), 3)
+        self.assertEqual(len(raw["market_context"]["evidence_refs"]), len(BENCHMARK_SYMBOLS))
         self.assertTrue(all(ref in evidence for ref in raw["market_context"]["evidence_refs"]))
+
+        run = run_research(
+            {
+                "schema_version": "0.1",
+                "market": "CN",
+                "workflow": "daily_report",
+                "decision_at": self.retrieved_at.isoformat(),
+                "snapshot": {"selector": "id", "snapshot_id": result.snapshot_id},
+                "top_n": 5,
+            },
+            self.workspace,
+        )
+        packet_path = (
+            self.workspace
+            / "artifacts"
+            / "runs"
+            / run["run_id"]
+            / "research_packet.json"
+        )
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        pricing = packet["all_decisions"][0]["opportunity_profile"]["market_pricing"]
+        self.assertEqual(pricing["origin"], "deterministic_market_signal")
+        self.assertEqual(pricing["assessment"], "underreacted")
 
     def test_hithink_uses_one_client_and_merges_enrichment_without_changing_gates(self) -> None:
         daily = collect_cn_market_data(
@@ -699,6 +723,11 @@ def _research_seed() -> dict[str, Any]:
             "risk_flags": [],
         }
     )
+    candidate["opportunity_profile"]["market_pricing"] = {
+        "assessment": "unknown",
+        "reason": "结构化行情将在冻结快照时采集，seed 不预填市场判断。",
+        "evidence_refs": [],
+    }
     theme["candidates"] = [candidate]
     return {
         "schema_version": "0.1",

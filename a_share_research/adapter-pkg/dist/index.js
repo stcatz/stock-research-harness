@@ -74,6 +74,16 @@ function getInteger(value, field) {
     }
     return value;
 }
+function requireResultString(value, field) {
+    const result = getString(value, field);
+    if (result === undefined) throw new Error(`${field} is required in the CLI result`);
+    return result;
+}
+function requireResultInteger(value, field) {
+    const result = getInteger(value, field);
+    if (result === undefined) throw new Error(`${field} is required in the CLI result`);
+    return result;
+}
 function getBoolean(value, field) {
     if (value == null) {
         return undefined;
@@ -238,6 +248,40 @@ function normalizeOutcomeHistoryArgs(args) {
         limit
     };
 }
+function normalizeResearchHistoryArgs(args) {
+    const raw = ensurePlainObject(args, 'cn_research_history arguments');
+    rejectUnknownFields(raw, [
+        'evaluation_at',
+        'limit',
+        'candidate_ids'
+    ], 'cn_research_history arguments');
+    const evaluationAt = validateDecisionAt(raw.evaluation_at);
+    const limit = getInteger(raw.limit, 'limit') ?? 100;
+    if (limit < 1 || limit > 500) {
+        throw new Error('limit must be an integer between 1 and 500');
+    }
+    if (raw.candidate_ids != null && !Array.isArray(raw.candidate_ids)) {
+        throw new Error('candidate_ids must be an array');
+    }
+    const candidateIds = raw.candidate_ids?.map((value, index)=>{
+        const candidateId = getString(value, `candidate_ids[${String(index)}]`);
+        if (!candidateId) throw new Error(`candidate_ids[${String(index)}] must not be empty`);
+        return candidateId;
+    });
+    if (candidateIds !== undefined && (candidateIds.length > 50 || new Set(candidateIds).size !== candidateIds.length)) {
+        throw new Error('candidate_ids must contain at most 50 unique strings');
+    }
+    for (const candidateId of candidateIds ?? []){
+        if (candidateId.length > 256 || /[\u0000-\u001f\u007f]/.test(candidateId)) {
+            throw new Error('candidate_ids contains an invalid candidate ID');
+        }
+    }
+    return {
+        evaluation_at: evaluationAt,
+        limit,
+        candidate_ids: candidateIds
+    };
+}
 function sanitizeCliError(raw) {
     const schemaVersion = getString(raw.schema_version, 'schema_version') || '0.1';
     const error = getString(raw.error, 'error') || 'UnknownError';
@@ -272,7 +316,14 @@ function sanitizeFocus(value) {
                 name,
                 theme: getString(record.theme, 'focus.theme'),
                 decision: getString(record.decision, 'focus.decision'),
-                reason: getString(record.reason, 'focus.reason')
+                reason: getString(record.reason, 'focus.reason'),
+                attention_score: getInteger(record.attention_score, 'focus.attention_score'),
+                attention_bucket: getString(record.attention_bucket, 'focus.attention_bucket'),
+                opportunity_view: getString(record.opportunity_view, 'focus.opportunity_view'),
+                new_information: getString(record.new_information, 'focus.new_information'),
+                economic_impact: getString(record.economic_impact, 'focus.economic_impact'),
+                expectation_gap: getString(record.expectation_gap, 'focus.expectation_gap'),
+                market_pricing: getString(record.market_pricing, 'focus.market_pricing')
             })
         ];
     });
@@ -423,6 +474,54 @@ export function sanitizeOutcomeHistoryResult(raw) {
     }
     return sanitizeBoundedJson(payload);
 }
+export function sanitizeResearchHistoryResult(raw) {
+    const payload = ensurePlainObject(raw, 'research history result');
+    if (payload.error != null) return sanitizeCliError(payload);
+    if (payload.market !== 'CN' || payload.schema_version !== '0.1') {
+        throw new Error('CLI research history handshake failed; expected CN schema 0.1');
+    }
+    if (!Array.isArray(payload.candidates)) {
+        throw new Error('CLI research history candidates must be an array');
+    }
+    const candidates = payload.candidates.slice(0, 50).map((rawCandidate, index)=>{
+        const candidate = ensurePlainObject(rawCandidate, `research history candidates[${String(index)}]`);
+        const latestDecision = requireResultString(candidate.latest_decision, 'latest_decision');
+        if (latestDecision !== 'exclude' && latestDecision !== 'continue_research' && latestDecision !== 'observe') {
+            throw new Error('CLI research history returned an unsupported latest_decision');
+        }
+        const agingAction = requireResultString(candidate.aging_action, 'aging_action');
+        if (![
+            'active',
+            'deprioritize',
+            'close_review',
+            'closed'
+        ].includes(agingAction)) {
+            throw new Error('CLI research history returned an unsupported aging_action');
+        }
+        return {
+            candidate_id: requireResultString(candidate.candidate_id, 'candidate_id'),
+            symbol: requireResultString(candidate.symbol, 'symbol'),
+            latest_decision: latestDecision,
+            run_count: requireResultInteger(candidate.run_count, 'run_count'),
+            state_or_gap_transition_count: requireResultInteger(candidate.state_or_gap_transition_count, 'state_or_gap_transition_count'),
+            consecutive_continue_research: requireResultInteger(candidate.consecutive_continue_research, 'consecutive_continue_research'),
+            last_progress_at: requireResultString(candidate.last_progress_at, 'last_progress_at'),
+            stale_days: requireResultInteger(candidate.stale_days, 'stale_days'),
+            aging_action: agingAction
+        };
+    });
+    return omitUndefinedProperties({
+        schema_version: '0.1',
+        market: 'CN',
+        evaluation_at: requireResultString(payload.evaluation_at, 'evaluation_at'),
+        candidate_filter_count: payload.candidate_filter_count === null ? null : requireResultInteger(payload.candidate_filter_count, 'candidate_filter_count'),
+        candidate_count: requireResultInteger(payload.candidate_count, 'candidate_count'),
+        returned_count: requireResultInteger(payload.returned_count, 'returned_count'),
+        aging_counts: sanitizeBoundedJson(payload.aging_counts),
+        candidates,
+        policy: sanitizeBoundedJson(payload.policy)
+    });
+}
 export function sanitizeResearchRunResult(raw) {
     const payload = ensurePlainObject(raw, 'run result');
     if (payload.error != null) {
@@ -443,6 +542,10 @@ export function sanitizeResearchRunResult(raw) {
     const artifactId = getString(payload.artifact_id, 'artifact_id') || '';
     const status = getString(payload.status, 'status') || '';
     const writerMode = getString(payload.writer_mode, 'writer_mode') || '';
+    const methodId = getString(payload.method_id, 'method_id');
+    if (!methodId) {
+        throw new Error('CLI run result returned no method_id');
+    }
     const dataMode = getString(payload.data_mode, 'data_mode') || '';
     const pitQuality = getString(payload.pit_quality, 'pit_quality') || '';
     const decisionAt = getString(payload.decision_at, 'decision_at') || '';
@@ -455,6 +558,7 @@ export function sanitizeResearchRunResult(raw) {
         artifact_id: artifactId,
         status,
         writer_mode: writerMode,
+        method_id: methodId,
         data_mode: dataMode,
         pit_quality: pitQuality,
         workflow,
@@ -510,6 +614,7 @@ function renderResearchRun(value) {
         `workflow: ${value.workflow}`,
         `run_id: ${value.run_id}`,
         `artifact_id: ${value.artifact_id}`,
+        `method_id: ${value.method_id ?? 'UNKNOWN'}`,
         `status: ${value.status}`,
         `decision_at: ${value.decision_at}`,
         `snapshot_id: ${value.snapshot_id}`,
@@ -523,6 +628,7 @@ function renderResearchRun(value) {
         lines.push('', 'focus:');
         for (const item of value.focus.slice(0, 5)){
             lines.push(`- ${item.name}(${item.symbol}) ${item.decision ?? ''}`.trim());
+            lines.push(`  attention=${String(item.attention_score ?? 'UNKNOWN')} ` + `bucket=${item.attention_bucket ?? 'UNKNOWN'} view=${item.opportunity_view ?? 'UNKNOWN'} ` + `new=${item.new_information ?? 'UNKNOWN'} impact=${item.economic_impact ?? 'UNKNOWN'} ` + `gap=${item.expectation_gap ?? 'UNKNOWN'} pricing=${item.market_pricing ?? 'UNKNOWN'}`);
         }
     }
     if (value.available_sections?.length) {
@@ -599,6 +705,20 @@ export async function readOutcomeHistory(args, options = {}) {
         limit: normalized.limit
     }, options);
     return sanitizeOutcomeHistoryResult(raw);
+}
+export async function readResearchHistory(args, options = {}) {
+    const normalized = normalizeResearchHistoryArgs(args);
+    const request = {
+        schema_version: '0.1',
+        market: 'CN',
+        evaluation_at: normalized.evaluation_at,
+        limit: normalized.limit
+    };
+    if (normalized.candidate_ids !== undefined) {
+        request.candidate_ids = normalized.candidate_ids;
+    }
+    const raw = await callResearchCli('research-history', request, options);
+    return sanitizeResearchHistoryResult(raw);
 }
 function registerResearchTool(ctx) {
     return ctx.tools.register(defineTool({
@@ -756,8 +876,50 @@ function registerOutcomeHistoryTool(ctx) {
         }
     }));
 }
+function registerResearchHistoryTool(ctx) {
+    return ctx.tools.register(defineTool({
+        name: 'cn_research_history',
+        description: 'Read candidate aging, consecutive continue_research counts and days since the last state-or-gap change. Use it to allocate research attention; it never rewrites canonical decisions.',
+        parameters: {
+            evaluation_at: {
+                type: 'string',
+                required: true,
+                description: 'Timezone-aware cutoff for research-history state.'
+            },
+            limit: {
+                type: 'integer',
+                description: 'Maximum candidate histories, 1-500.'
+            },
+            candidate_ids: {
+                type: 'array',
+                items: {
+                    type: 'string'
+                },
+                description: 'Optional exact canonical candidate IDs, at most 50.'
+            }
+        },
+        output: {
+            schema: {
+                type: 'object',
+                additionalProperties: true
+            },
+            render: (_args, value)=>[
+                    {
+                        type: 'text',
+                        text: JSON.stringify(value, null, 2).slice(0, 30000)
+                    }
+                ]
+        },
+        async execute (args, exec) {
+            return readResearchHistory(args, {
+                signal: exec.signal
+            });
+        }
+    }));
+}
 export function apply(ctx) {
     registerResearchTool(ctx);
     registerArtifactTool(ctx);
     registerOutcomeHistoryTool(ctx);
+    registerResearchHistoryTool(ctx);
 }

@@ -3,11 +3,13 @@ from __future__ import annotations
 import copy
 import json
 import tempfile
+import tomllib
 import unittest
 from importlib.resources import files
 from pathlib import Path
 
 from a_share_research.core.contracts import ContractError, RunRequest
+from a_share_research.core.engine import METHOD_ID
 from a_share_research.core.snapshot import load_snapshot, validate_snapshot
 
 
@@ -77,6 +79,19 @@ class RunRequestTests(unittest.TestCase):
         )
         self.assertEqual(schema["properties"]["market"]["const"], "CN")
 
+    def test_v2_method_card_matches_the_canonical_engine_identity(self) -> None:
+        method_path = (
+            Path(__file__).resolve().parents[1] / "methods" / "a_share_theme_v2.toml"
+        )
+        with method_path.open("rb") as handle:
+            method = tomllib.load(handle)
+
+        self.assertEqual(method["id"], METHOD_ID)
+        self.assertEqual(method["evaluation"]["horizons_trading_days"], [5, 20])
+        self.assertTrue(
+            method["source_policy"]["economic_impact_requires_frozen_primary_content"]
+        )
+
 
 class SnapshotContractTests(unittest.TestCase):
     @classmethod
@@ -90,11 +105,50 @@ class SnapshotContractTests(unittest.TestCase):
         self.assertEqual(snapshot.data_mode, "fixture")
         self.assertEqual(snapshot.pit_quality, "FIXTURE")
         self.assertIn("EV-FUTURE-001", snapshot.evidence_by_id)
+        self.assertEqual(
+            snapshot.evidence_by_id["EV-COMPANY-001"]["document"]["source_document_id"],
+            "DEMO-COMPANY-ANNOUNCEMENT-001",
+        )
+
+    def test_frozen_document_text_requires_a_matching_hash(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        invalid["evidence"][2]["document"]["text_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ContractError, "does not match text"):
+            validate_snapshot(invalid)
 
     def test_unknown_evidence_reference_is_rejected(self) -> None:
         invalid = copy.deepcopy(self.demo)
         invalid["themes"][0]["evidence_refs"].append("EV-NOT-FOUND")
         with self.assertRaisesRegex(ContractError, "unknown evidence"):
+            validate_snapshot(invalid)
+
+    def test_v2_opportunity_profile_is_complete_and_legacy_snapshot_stays_replayable(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        del invalid["themes"][0]["candidates"][0]["opportunity_profile"]["economic_impact"]
+        with self.assertRaisesRegex(ContractError, "missing required fields"):
+            validate_snapshot(invalid)
+
+        short_chain = copy.deepcopy(self.demo)
+        short_chain["themes"][0]["candidates"][0]["impact_chain"] = short_chain["themes"][0][
+            "candidates"
+        ][0]["impact_chain"][:2]
+        with self.assertRaisesRegex(ContractError, "at least three"):
+            validate_snapshot(short_chain)
+
+        legacy = copy.deepcopy(self.demo)
+        legacy_candidate = legacy["themes"][0]["candidates"][0]
+        del legacy_candidate["opportunity_profile"]
+        del legacy_candidate["impact_chain"]
+        validated = validate_snapshot(legacy)
+        self.assertNotIn("opportunity_profile", validated.themes[0]["candidates"][0])
+
+    def test_economic_magnitude_ratio_must_match_frozen_inputs(self) -> None:
+        invalid = copy.deepcopy(self.demo)
+        magnitude = invalid["themes"][0]["candidates"][0]["opportunity_profile"][
+            "economic_impact"
+        ]["magnitude"]
+        magnitude["ratio"] = "0.9"
+        with self.assertRaisesRegex(ContractError, "ratio does not match"):
             validate_snapshot(invalid)
 
     def test_all_evidence_requires_a_timezone(self) -> None:

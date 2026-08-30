@@ -1,0 +1,59 @@
+id = "a-share-theme-v2.0"
+market = "CN"
+purpose = "Evidence-qualified research attention; never a trading signal."
+
+[theme_dimensions]
+big = "Assess addressable economic scale, not narrative popularity."
+new = "Identify the decision-relevant variable that changed versus the prior baseline."
+many = "Require a plausible beneficiary set and contemporaneous market breadth."
+durable = "Require follow-up verification instead of treating one headline as a cycle."
+timely = "Use only evidence available by decision_at and test whether the event matters now."
+
+[opportunity_contract]
+new_information = "Formal evidence must establish what became newly knowable."
+economic_impact = "Quantify numerator, company denominator, formula and ratio from frozen primary content."
+expectation_gap = "State the prior baseline and evidence for positive, neutral, negative or unknown divergence."
+market_pricing = "Use frozen structured market data; media and price direction alone cannot prove mispricing."
+candidate_impact_chain = "At least three candidate-specific steps from event to industry quantity/price to company financial effect."
+next_catalyst = "A future date is valid only when a formal source and an executable verification rule support it."
+
+[attention_score]
+theme_dimensions = 25
+new_information = 15
+economic_impact = 20
+expectation_gap = 15
+market_pricing = 10
+candidate_impact_chain = 10
+next_catalyst = 5
+stage_and_hard_risk_penalties = true
+meaning = "Research-attention priority only; not expected return or probability."
+
+[source_policy]
+formal_source_required = true
+structured_market_required = true
+secondary_is_lead_only = true
+economic_impact_requires_frozen_primary_content = true
+unknown_when_not_proven = true
+
+[state_policy]
+allowed = ["exclude", "continue_research", "observe"]
+exclude_requires_negative_or_closed_case = true
+continue_research_is_not_default_for_every_gap = true
+observe_requires_positive_evidence_chain = true
+aging_review_days = [14, 30]
+aging_never_rewrites_canonical_state = true
+
+[evaluation]
+metric = "benchmark_relative_total_return"
+benchmark = "000906.SH"
+horizons_trading_days = [5, 20]
+exact_trading_sessions = true
+sidecar_is_immutable = true
+history_respects_available_at = true
+
+[prohibited]
+broker_connection = true
+automatic_order = true
+target_price = true
+position_sizing = true
+deterministic_price_prediction = true

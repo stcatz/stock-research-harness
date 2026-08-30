@@ -158,9 +158,18 @@ printf '%s' '{
 `candidate_id` 在 symbol 于本次运行中唯一时可以省略；同一股票跨多个题材出现时必须显式提供，
 否则命令拒绝回填，避免把结果记到错误的题材判断上。
 
-`outcome-history` 只返回 `available_at <= evaluation_at` 的旧观察。`audit-drift` 接受显式的
+日常 Harness 不再要求人工逐条计算：新快照固定采集中证 800，并保留 31 个活跃交易日的
+不复权收盘窗口。`outcome-settle-snapshot` 只用冻结快照寻找研究基准日后的精确第 5/20 个交易日，
+自动写入同一不可变 sidecar；基准缺失、候选停牌或窗口不足时保持 pending。最近 90 天仍未完成
+T+20 的旧候选会进入只读行情 watchlist，即使已从当天 seed 删除，也会继续采集到可结算为止；超过
+90 天仍缺行情的槽位记为 expired，不会让每日 pending 队列无限增长。
+
+`outcome-history` 只返回 `available_at <= evaluation_at` 的旧观察。`research-history` 返回候选连续
+`continue_research` 次数和距上次状态/缺口进展的天数；14 天触发降级复核，30 天触发关闭复核，
+但不会改写 canonical 状态。`audit-drift` 接受显式的
 `before_snapshot_id` 和 `after_snapshot_id`，比较相同实体、指标和观察期的历史值，并把不可变 receipt
-写入 `data/audit/cn/provider-drift/`。
+写入 `data/audit/cn/provider-drift/`。重建型数据仅重采时间变化且未跨越 `decision_at` 时为 info；
+只有改变 PIT 资格才是 critical。
 
 CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定。DSH 工具结果只返回相对路径、短摘要和 opaque ID。
 
@@ -169,6 +178,15 @@ CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定
 研究引擎运行时仍然只读取冻结 snapshot；联网只发生在显式的 `collect-snapshot` 或 `provider-probe` 命令中。`collect-snapshot` 把研究员维护的政策、公告、题材和候选 seed，与选定 provider 的结构化市场数据合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。默认 provider 仍是 BaoStock；显式选择 `hithink` 时会使用同花顺 Financial API。
 
 先复制 [research_seed.example.json](config/research_seed.example.json)，删除 `example_notice`，并把所有合成名称、URL、结论和人工复核项换成你已核验的真实内容。示例文件和仍含 `example.invalid`、`EXAMPLE_ONLY`、`[合成示例]` 等标记的副本会被采集器拒绝；每条 evidence 必须包含独立的 `published_at`、`effective_at`、`available_at`、`retrieved_at` 与 `as_of`，seed 也不能预填行情或 `market_evidence_refs`。候选身份必须满足例如 `symbol=600000` 对应 `security_id=CN.SH.600000`。
+
+V2 候选可提供完整 `opportunity_profile`（新信息、经济影响、预期差、市场定价、正式催化）和至少
+三环的候选级 `impact_chain`。只有引用冻结且在 `decision_at` 前可用的 Evidence ID 才计分；普通
+`data_gaps` 会进入调查队列，但不再自动把候选压到 `continue_research`。官方公告全文可用
+`evidence.document` 冻结，字段为 `source_document_id`、`media_type`、`extraction_method`、`text`、
+`text_sha256`；正文进入分页 facts/packet，不在报告正文整段展开。经济影响只有在正式正文或冻结的
+结构化财务事实支持下才得分，并须写明金额分子、收入/利润/现金流等分母、计算公式和可校验 ratio；
+摘要或媒体口径即使填满字段也不能获得经济量级分。当前仓库仍不自动下载巨潮 PDF，正文的授权、
+获取和抽取准确性由接入方负责。
 
 ```bash
 cd ~/ai/stock/a_share_research
@@ -210,7 +228,7 @@ uv run a-share-research \
 
 HiThink 模式会采集：
 
-- 候选股和上证综指、深证成指、创业板指的不复权日线；
+- 候选股和上证综指、深证成指、创业板指、中证 800 的不复权日线；
 - 全市场上涨、下跌、平盘、无成交家数和成交额；
 - 涨停、跌停、炸板池及候选命中；
 - 候选最新估值快照；
@@ -255,11 +273,13 @@ wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decisio
 
 ### 显式联网的机会发现 Harness
 
-联网模型不放进离线 `run`。`run_cn_harness_daily.sh` 先执行上述 canonical 流程，再做两次隔离调用：
+联网模型不放进离线 `run`。`run_cn_harness_daily.sh` 先执行 canonical 流程和冻结快照自动结算，再做
+两次隔离调用：
 
 1. 反方只可分页读取 `facts`，看不到 bull thesis、原反方或最终决策；
-2. 裁判分页读取报告，加载当时已可用的 outcome history，把第一步 JSON 当作不可信输入，并可联网查询
-   `decision_at` 之前的一手来源。
+2. 裁判分页读取报告，加载 outcome history 与候选老化历史，把第一步 JSON 当作不可信输入，并可
+   联网查询 `decision_at` 之前的一手来源；模型只输出结构化 JSON，经过强校验后由确定性渲染器生成
+   最终 Top 3 简报。
 
 ```bash
 bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
@@ -267,11 +287,22 @@ bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
   --seed-json ~/ai/stock/data/seeds/cn-research-seed.json \
   --provider hithink \
   --dsh-bin "$(command -v dsh)" \
-  --profile headless
+  --bear-profile skeptic \
+  --judge-profile headless \
+  --bear-model-id your-bear-model-version \
+  --judge-model-id your-judge-model-version
 ```
 
-联网输出写入 `.runtime/harness/cn/<snapshot_id>/`，不会改写 canonical artifact；其中
-`harness-manifest.json` 固定代码版本、prompt 模板和结果哈希。模型新发现的主题或标的
+反方与裁判 profile 必须不同；默认分别为 `web` 和 `headless`。`--profile` 仅作为旧命令的
+`--judge-profile` 别名。模型 ID 是审计标签，不会改变 DSH profile 的实际模型配置；若提供了两个明确
+版本，它们也必须不同。请在调度前用 DSH 配置检查确认两个 profile 确实指向预期模型。
+
+联网输出写入 `.runtime/harness/cn/<snapshot_id>/`，不会改写 canonical artifact；其中包含
+`canonical-runner-receipt.json`、完整分页校验回执 `artifact-integrity.json`、`settlement.json`、
+冻结的 `outcome-history.json` / `research-history.json`、规范化反方 JSON、
+`final-judgment.json` 和瘦身机会简报。
+`harness-manifest.json` 固定代码版本、DSH 二进制哈希、两个 profile、声明的模型版本、prompt 模板、
+模型原始/规范化输出哈希。模型新发现的主题或标的
 只能标为“尚未冻结 / `continue_research`”，经官方来源核验并进入下一份 snapshot 后才可参与正式门槛。
 工作日 20:45 的模板位于
 `scripts/launchd/com.stcatz.stock-research.cn-harness-daily.plist.example`；模板不包含 API Key，安装前必须
@@ -279,18 +310,19 @@ bash ~/ai/stock/scripts/run_cn_harness_daily.sh \
 
 ## DeepSeek Harness
 
-插件位于 `adapter-pkg/`，只注册三个业务级只读/研究工具：
+插件位于 `adapter-pkg/`，只注册四个业务级只读/研究工具：
 
 - `cn_research_run`
 - `cn_artifact_read`
 - `cn_outcome_history`
+- `cn_research_history`
 
 插件不连接数据商、不读取 SQLite、不进行财务计算、不调用券商。开发时可用 `--patch` 临时挂载；验证稳定后再作为独立 bundle 安装。具体命令见 `adapter-pkg/README.md`。
 
 ## 当前边界
 
-`run`、`artifact-read` 和三个 DSH 业务工具仍是离线的；联网只发生在显式 collector/provider probe
-以及独立的 Harness 模型会话中。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场
+`run`、`artifact-read` 和四个 DSH 业务工具仍是离线的；联网只发生在显式 collector/provider probe
+以及独立的 Harness 模型会话中。BaoStock 模式只补候选和四只基准指数日线；HiThink 模式增加全市场
 宽度、特色池、估值和年度三表，但仍不提供官方公告自动冻结、严格 PIT 或数据再分发授权。Harness
 能够发现线索，却不会把网页内容自动提升为 canonical 事实。上游根仓库有 MIT LICENSE，但其 Python
 子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。

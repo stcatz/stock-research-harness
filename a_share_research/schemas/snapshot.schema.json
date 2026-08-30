@@ -81,10 +81,160 @@
                 "source_field": { "type": "string" }
               }
             }
+          },
+          "document": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "source_document_id",
+              "media_type",
+              "extraction_method",
+              "text",
+              "text_sha256"
+            ],
+            "properties": {
+              "source_document_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "media_type": { "enum": ["text/plain", "text/html", "application/pdf"] },
+              "extraction_method": {
+                "enum": ["manual_verified", "pdf_text_layer", "ocr", "html_text"]
+              },
+              "text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+              "text_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+            }
           }
         }
       }
     },
-    "themes": { "type": "array" }
+    "themes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/candidate" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "evidenceRefs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "strengthFactor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["assessment", "reason", "evidence_refs"],
+      "properties": {
+        "assessment": { "enum": ["strong", "medium", "weak", "unknown"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    },
+    "economicMagnitude": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "basis", "numerator", "denominator", "ratio", "formula"],
+      "properties": {
+        "status": { "enum": ["quantified", "partial", "unknown"] },
+        "basis": {
+          "enum": ["revenue", "profit", "cash_flow", "capex", "assets", "other", "unknown"]
+        },
+        "numerator": { "type": ["string", "number", "null"] },
+        "denominator": { "type": ["string", "number", "null"] },
+        "ratio": { "type": ["string", "number", "null"] },
+        "formula": { "type": "string", "minLength": 1 }
+      }
+    },
+    "economicFactor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["assessment", "reason", "evidence_refs", "magnitude"],
+      "properties": {
+        "assessment": { "enum": ["strong", "medium", "weak", "unknown"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "magnitude": { "$ref": "#/$defs/economicMagnitude" }
+      }
+    },
+    "expectationFactor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["assessment", "baseline", "reason", "evidence_refs"],
+      "properties": {
+        "assessment": { "enum": ["positive", "neutral", "negative", "unknown"] },
+        "baseline": {
+          "enum": ["consensus", "management_guidance", "historical", "market_implied", "none"]
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    },
+    "pricingFactor": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["assessment", "reason", "evidence_refs"],
+      "properties": {
+        "assessment": {
+          "enum": ["underreacted", "confirmed", "overreacted", "contradicted", "unknown"]
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    },
+    "catalyst": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["description", "scheduled_at", "verification_rule", "evidence_refs"],
+      "properties": {
+        "description": { "type": "string", "minLength": 1 },
+        "scheduled_at": { "type": ["string", "null"], "format": "date-time" },
+        "verification_rule": { "type": "string", "minLength": 1 },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    },
+    "opportunityProfile": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "new_information",
+        "economic_impact",
+        "expectation_gap",
+        "market_pricing",
+        "next_catalyst"
+      ],
+      "properties": {
+        "new_information": { "$ref": "#/$defs/strengthFactor" },
+        "economic_impact": { "$ref": "#/$defs/economicFactor" },
+        "expectation_gap": { "$ref": "#/$defs/expectationFactor" },
+        "market_pricing": { "$ref": "#/$defs/pricingFactor" },
+        "next_catalyst": { "$ref": "#/$defs/catalyst" }
+      }
+    },
+    "impactStep": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["step", "status", "evidence_refs"],
+      "properties": {
+        "step": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["supported", "partial", "unknown", "contradicted"] },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "opportunity_profile": { "$ref": "#/$defs/opportunityProfile" },
+        "impact_chain": {
+          "type": "array",
+          "minItems": 3,
+          "items": { "$ref": "#/$defs/impactStep" }
+        }
+      }
+    }
   }
 }

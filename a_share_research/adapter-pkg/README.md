@@ -5,8 +5,9 @@
 - 工具名：`cn_research_run`
 - 工具名：`cn_artifact_read`
 - 工具名：`cn_outcome_history`
+- 工具名：`cn_research_history`
 - 运行方式：显式 argv + JSON stdin/stdout 调用项目 `.venv` Python CLI
-- CLI 入口：`.venv/bin/python -m a_share_research.cli --workspace <workspace> run|artifact-read|outcome-history --request-json -`
+- CLI 入口：`.venv/bin/python -m a_share_research.cli --workspace <workspace> run|artifact-read|outcome-history|research-history --request-json -`
 - 市场固定：`CN`
 - 输出：canonical CLI JSON，白名单映射，不暴露绝对路径
 - 失败策略：`@deepseek-ai/dsh-tools` 缺失时拒绝加载，不静默降级
@@ -30,6 +31,9 @@
 - `cn_outcome_history`
   - `evaluation_at`: 带时区 ISO-8601 时间
   - `limit?`: 1–20；只返回当时已可用的旧结果，不写入 outcome。
+- `cn_research_history`
+  - `evaluation_at`: 带时区 ISO-8601 时间
+  - `limit?`: 1–500；返回连续中间态、无进展天数和注意力老化动作，不改写 canonical 结果。
 
 本包包含：
 

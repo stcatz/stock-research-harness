@@ -19,7 +19,14 @@ from .utils import read_json, sha256_value, write_json_atomic
 def audit_snapshot_drift(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
     data = require_mapping(raw_request, "request")
     unknown = sorted(
-        set(data) - {"schema_version", "market", "before_snapshot_id", "after_snapshot_id"}
+        set(data)
+        - {
+            "schema_version",
+            "market",
+            "before_snapshot_id",
+            "after_snapshot_id",
+            "decision_at",
+        }
     )
     if unknown:
         raise ContractError("request contains unsupported fields: " + ", ".join(unknown))
@@ -31,6 +38,11 @@ def audit_snapshot_drift(raw_request: Mapping[str, Any], workspace: Path) -> dic
     after_id = _identifier(data.get("after_snapshot_id"), "after_snapshot_id")
     if before_id == after_id:
         raise ContractError("before_snapshot_id and after_snapshot_id must differ")
+    decision_at = (
+        parse_datetime(data.get("decision_at"), "decision_at")
+        if data.get("decision_at") is not None
+        else None
+    )
 
     workspace = workspace.resolve()
     before = validate_snapshot(read_json(_snapshot_path(workspace, before_id)))
@@ -64,15 +76,36 @@ def audit_snapshot_drift(raw_request: Mapping[str, Any], workspace: Path) -> dic
         elif previous["status"] == "unknown" and current["status"] == "observed":
             severity = "info"
             change_type = "unknown_to_observed"
-        elif "available_at" in changed_fields or "effective_at" in changed_fields:
-            severity = "critical"
-            change_type = "historical_time_semantics_changed"
         elif previous["unit"] != current["unit"]:
             severity = "critical"
             change_type = "historical_unit_changed"
-        else:
+        elif previous["value"] != current["value"]:
             severity = "high"
             change_type = "historical_value_changed"
+        elif "effective_at" in changed_fields:
+            severity = "critical"
+            change_type = "historical_time_semantics_changed"
+        elif "available_at" in changed_fields:
+            before_available = parse_datetime(previous["available_at"], "before.available_at")
+            after_available = parse_datetime(current["available_at"], "after.available_at")
+            crossed_boundary = decision_at is not None and (
+                (before_available <= decision_at < after_available)
+                or (after_available <= decision_at < before_available)
+            )
+            if crossed_boundary:
+                severity = "critical"
+                change_type = "pit_eligibility_changed"
+            elif (
+                before.pit_quality == "RECONSTRUCTED_NON_PIT"
+                or after.pit_quality == "RECONSTRUCTED_NON_PIT"
+            ):
+                severity = "info"
+                change_type = "retrieval_timestamp_changed"
+            else:
+                severity = "high"
+                change_type = "historical_availability_changed"
+        else:
+            raise RuntimeError("unclassified historical drift fields")
         changes.append(
             {
                 "semantic_key": list(key),
@@ -111,6 +144,7 @@ def audit_snapshot_drift(raw_request: Mapping[str, Any], workspace: Path) -> dic
         "before_snapshot_hash": before.snapshot_hash,
         "after_snapshot_id": after.snapshot_id,
         "after_snapshot_hash": after.snapshot_hash,
+        "decision_at": decision_at.isoformat() if decision_at is not None else None,
         "shared_entity_count": len(shared_entities),
         "compared_semantic_fact_count": len(before_keys.union(after_keys)),
         "changes": changes,
@@ -122,6 +156,11 @@ def audit_snapshot_drift(raw_request: Mapping[str, Any], workspace: Path) -> dic
         "drift_hash": drift_hash,
         "status": "alert" if any(item["severity"] != "info" for item in changes) else "ok",
         "change_count": len(changes),
+        "material_change_count": sum(item["severity"] != "info" for item in changes),
+        "severity_counts": {
+            severity: sum(item["severity"] == severity for item in changes)
+            for severity in ("critical", "high", "info")
+        },
     }
     destination = workspace / "data" / "audit" / "cn" / "provider-drift" / f"{result['drift_id']}.json"
     if destination.is_file():

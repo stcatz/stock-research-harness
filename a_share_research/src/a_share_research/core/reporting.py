@@ -89,7 +89,32 @@ def render_report(packet: dict[str, Any]) -> str:
         )
     lines.append("")
 
-    lines.extend(["## 研究优先候选", ""])
+    lines.extend(
+        [
+            "## 机会注意力排序",
+            "",
+            "| 候选 | 研究状态 | 注意力层 | 机会视图 | 分数 | 新信息 | 经济影响 | 预期差 | 市场定价 | 候选传导链 | 已核验催化 |",
+            "|---|---|---|---|---:|---|---|---|---|---:|---|",
+        ]
+    )
+    for candidate in packet["focus"]:
+        profile = candidate["opportunity_profile"]
+        catalyst = profile["next_catalyst"]
+        lines.append(
+            f"| {candidate['name']}（{candidate['symbol']}） | {candidate['decision']} | "
+            f"{candidate['attention_bucket']} | {candidate['opportunity_view']} | "
+            f"{candidate['attention_score']} | {profile['new_information']['assessment']} | "
+            f"{profile['economic_impact']['assessment']} | "
+            f"{profile['expectation_gap']['assessment']} | "
+            f"{profile['market_pricing']['assessment']} | "
+            f"{profile['impact_chain']['coverage_ratio']:.0%} | "
+            f"{catalyst['scheduled_at'] if catalyst['evidence_qualified'] else 'UNKNOWN'} |"
+        )
+    if not packet["focus"]:
+        lines.append("| 无 | UNKNOWN | backlog | unclear | 0 | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | 0% | UNKNOWN |")
+    lines.extend(["", "> 分数只表示证据化研究注意力，不是预期收益、交易信号或确定性判断。", ""])
+
+    lines.extend(["## 研究优先候选（审计明细）", ""])
     if not packet["focus"]:
         lines.extend(["没有候选满足继续研究或观察门槛。", ""])
     for index, candidate in enumerate(packet["focus"], start=1):
@@ -110,7 +135,8 @@ def render_report(packet: dict[str, Any]) -> str:
         for item in packet["research_queue"]:
             lines.append(
                 f"- **{item['name']}（{item['symbol']}）**：优先级 "
-                f"`{item['research_priority']}/100`，缺口 {len(item['gaps'])} 项，"
+                f"`{item['research_priority']}/100`，注意力层 `{item['attention_bucket']}`，"
+                f"机会视图 `{item['opportunity_view']}`，缺口 {len(item['gaps'])} 项，"
                 "独立反方复核待完成。"
             )
             for gap in item["gaps"]:
@@ -151,11 +177,13 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
         "",
         f"- 处理结果：**{candidate['decision_label']}**",
         f"- 研究优先级：`{candidate['research_priority']}/100`",
+        f"- 注意力层：`{candidate['attention_bucket']}`",
+        f"- 机会视图：`{candidate['opportunity_view']}`",
         f"- 证据状态：`{candidate['evidence_state']}`",
         f"- 角色：{ROLE_LABELS[candidate['role']]}",
         f"- 周期阶段：{candidate['stage']}",
         f"- 风险标志：{_join_or_unknown(candidate['risk_flags'])}",
-        f"- 下一催化或观察日期：{candidate['next_catalyst_at']}",
+        f"- 已核验下一催化：{candidate['next_catalyst_at'] or 'UNKNOWN'}",
         "",
         "#### 事实",
         "",
@@ -188,7 +216,12 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
             "",
             "#### 模型/规则推断",
             "",
-            f"- 受益传导链：{' -> '.join(candidate['transmission_chain'])}",
+            "- 题材五维（仅引用合格时计分）："
+            + "；".join(
+                f"{DIMENSION_LABELS[name]}={item['assessment']}({item['points']}/{item['max_points']})"
+                for name, item in candidate["method_dimensions"].items()
+            ),
+            f"- 题材级传导假设：{' -> '.join(candidate['transmission_chain'])}",
             f"- 当前研究假设：{candidate['thesis']}",
             f"- 反方解释：{candidate['counter_thesis']}",
             f"- 证伪条件：{_join_or_unknown(candidate['invalidation_conditions'])}",
@@ -196,6 +229,47 @@ def _candidate_card(index: int, candidate: dict[str, Any]) -> list[str]:
             f"- 待人工复核：{_join_or_unknown(candidate['manual_review_items'])}",
             "- 独立证伪：待联网 Harness 仅基于事实层完成，且不向反方展示多方结论。",
             f"- 处理理由：{'；'.join(candidate['reasons'])}",
+            "",
+            "#### 候选级机会判断（V2）",
+            "",
+            "| 因子 | 判断 | 证据合格 | 得分 | 理由 |",
+            "|---|---|---|---:|---|",
+        ]
+    )
+    profile = candidate["opportunity_profile"]
+    for name, label in (
+        ("new_information", "新信息"),
+        ("economic_impact", "经济影响"),
+        ("expectation_gap", "预期差"),
+        ("market_pricing", "市场定价"),
+    ):
+        factor = profile[name]
+        lines.append(
+            f"| {label} | {factor['assessment']} | {factor['evidence_qualified']} | "
+            f"{factor['points']}/{factor['max_points']} | {factor['reason']} |"
+        )
+    magnitude = profile["economic_impact"].get("magnitude", {})
+    lines.append("")
+    lines.append(
+        "- 经济影响量级："
+        f"{magnitude.get('status', 'unknown')} / {magnitude.get('basis', 'unknown')}；"
+        f"numerator={magnitude.get('numerator')}；denominator={magnitude.get('denominator')}；"
+        f"ratio={magnitude.get('ratio')}；formula={magnitude.get('formula', 'UNKNOWN')}。"
+    )
+    lines.extend(["", "候选级传导链：", ""])
+    for step in profile["impact_chain"]["steps"]:
+        lines.append(
+            f"- [{step['status']}] {step['step']}；证据："
+            f"{_join_or_unknown(step['evidence_refs'])}"
+        )
+    catalyst = profile["next_catalyst"]
+    lines.extend(
+        [
+            "",
+            f"- 催化剂：{catalyst['description']}；时间："
+            f"{catalyst['scheduled_at'] or 'UNKNOWN'}；证据合格："
+            f"{catalyst['evidence_qualified']}；核验规则：{catalyst['verification_rule']}",
+            f"- 未覆盖机会因子：{_join_or_unknown(profile['missing_opportunity_factors'])}",
             "",
             "#### 估值画像（确定性计算）",
             "",

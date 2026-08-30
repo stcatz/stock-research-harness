@@ -5,11 +5,12 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import stat
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -136,8 +137,13 @@ def collect_cn_snapshot(
         hithink_client = HiThinkClient(raw_store=raw_store)
         active_provider = HiThinkProvider(hithink_client)
 
+    settlement_watchlist = _unsettled_outcome_watchlist(
+        resolved_workspace,
+        reference_time=retrieved_at or datetime.now(SHANGHAI_TZ),
+    )
+    collection_symbols = tuple(sorted(set(candidate_symbols).union(settlement_watchlist)))
     collection = collect_cn_market_data(
-        candidate_symbols,
+        collection_symbols,
         provider=active_provider,
         retrieved_at=retrieved_at,
     )
@@ -423,6 +429,51 @@ def _normalize_provider_kind(value: str) -> str:
     if normalized not in {"baostock", "hithink"}:
         raise CollectionError("provider_kind must be baostock or hithink")
     return normalized
+
+
+def _unsettled_outcome_watchlist(
+    workspace: Path,
+    *,
+    reference_time: datetime,
+) -> tuple[str, ...]:
+    """Keep recent removed candidates in market collection until T+20 can settle.
+
+    The watchlist is read-only and bounded.  It adds market evidence to the frozen snapshot but
+    never re-adds a company to the editorial candidate set or changes a canonical decision.
+    """
+
+    database = workspace / "data" / "stock_research.sqlite3"
+    if not database.is_file():
+        return ()
+    cutoff = reference_time.astimezone(SHANGHAI_TZ) - timedelta(days=90)
+    try:
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT r.decision_at, c.symbol
+                FROM candidate_decisions AS c
+                JOIN runs AS r ON r.run_id = c.run_id
+                LEFT JOIN decision_outcomes AS outcome
+                  ON outcome.run_id = c.run_id AND outcome.candidate_id = c.candidate_id
+                GROUP BY r.run_id, c.candidate_id
+                HAVING count(outcome.observation_id) < 2
+                ORDER BY r.decision_at DESC, c.symbol
+                LIMIT 500
+                """
+            ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise CollectionError("could not read the outcome settlement watchlist") from exc
+    symbols: set[str] = set()
+    for row in rows:
+        try:
+            decision_at = parse_datetime(row["decision_at"], "runs.decision_at")
+            symbol = normalize_baostock_symbol(row["symbol"])
+        except (ContractError, TypeError, ValueError):
+            continue
+        if decision_at >= cutoff:
+            symbols.add(symbol)
+    return tuple(sorted(symbols))
 
 
 def _resolve_hithink_raw_store_root(

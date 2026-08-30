@@ -17,6 +17,7 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9._-]+$",
       "maxLength": 128
-    }
+    },
+    "decision_at": { "type": "string", "format": "date-time" }
   }
 }

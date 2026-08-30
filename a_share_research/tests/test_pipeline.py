@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 import subprocess
@@ -8,8 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from a_share_research.core.contracts import DISCLAIMER
+from a_share_research.core.contracts import DISCLAIMER, RunRequest, parse_datetime
+from a_share_research.core.engine import build_research_packet
 from a_share_research.core.pipeline import read_artifact, run_research
+from a_share_research.core.snapshot import validate_snapshot
 
 
 class PipelineTests(unittest.TestCase):
@@ -32,6 +35,7 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual(result["market"], "CN")
         self.assertEqual(result["data_mode"], "fixture")
+        self.assertEqual(result["method_id"], "a-share-theme-v2.0")
         self.assertEqual(
             result["counts"],
             {"observe": 1, "continue_research": 1, "exclude": 1},
@@ -61,6 +65,35 @@ class PipelineTests(unittest.TestCase):
         excluded = next(item for item in packet["excluded"] if item["symbol"] == "DEMO003")
         self.assertIn("EV-FUTURE-001", excluded["time_leak_evidence_refs"])
         self.assertNotIn("EV-FUTURE-001", excluded["usable_evidence_refs"])
+
+    def test_missing_qualification_evidence_is_backlog_not_an_automatic_exclusion(self) -> None:
+        snapshot = copy.deepcopy(
+            json.loads(
+                (
+                    Path(__file__).resolve().parents[1]
+                    / "src"
+                    / "a_share_research"
+                    / "fixtures"
+                    / "demo_snapshot.json"
+                ).read_text(encoding="utf-8")
+            )
+        )
+        theme = snapshot["themes"][0]
+        theme["evidence_refs"] = ["EV-INDUSTRY-001", "EV-MARKET-001"]
+        theme["candidates"][1]["evidence_refs"] = ["EV-INDUSTRY-001"]
+
+        packet = build_research_packet(
+            validate_snapshot(snapshot),
+            RunRequest.from_dict(self.request),
+            generated_at=parse_datetime(self.request["decision_at"], "decision_at"),
+        )
+
+        candidate = next(
+            item for item in packet["all_decisions"] if item["symbol"] == "DEMO002"
+        )
+        self.assertFalse(candidate["gates"]["official_event"])
+        self.assertEqual(candidate["decision"], "continue_research")
+        self.assertEqual(candidate["attention_bucket"], "backlog")
 
     def test_same_request_reuses_immutable_run(self) -> None:
         first = run_research(self.request, self.workspace)

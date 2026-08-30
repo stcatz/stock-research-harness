@@ -137,7 +137,7 @@ class MarketDataCollectionTests(unittest.TestCase):
         self.assertEqual(fragment["pit_quality"], "RECONSTRUCTED_NON_PIT")
         self.assertEqual(fragment["available_at"], self.retrieved_at.isoformat())
         self.assertEqual(fragment["as_of"], "2026-08-14T15:00:00+08:00")
-        self.assertEqual(len(fragment["calculation_window"]), 11)
+        self.assertEqual(len(fragment["calculation_window"]), len(self.session_dates))
         self.assertIn(
             "does not provide an immutable first-seen timestamp", fragment["non_pit_notice"]
         )
@@ -145,7 +145,7 @@ class MarketDataCollectionTests(unittest.TestCase):
         context = result.market_context_fragment()
         self.assertIn("UNKNOWN", context["breadth"])
         self.assertIn("not full-market breadth", context["calculation_note"])
-        self.assertEqual(len(context["evidence_refs"]), 3)
+        self.assertEqual(len(context["evidence_refs"]), len(BENCHMARK_SYMBOLS))
 
     def test_canonical_provider_may_report_unknown_optional_fields(self) -> None:
         series_by_code = {
@@ -158,7 +158,7 @@ class MarketDataCollectionTests(unittest.TestCase):
             [self.candidate], provider=provider, retrieved_at=self.retrieved_at
         )
 
-        self.assertEqual(len(provider.queries), 4)
+        self.assertEqual(len(provider.queries), len(BENCHMARK_SYMBOLS) + 1)
         candidate = next(item for item in result.instruments if item.code == self.candidate)
         self.assertIsNone(candidate.latest.turn)
         self.assertEqual(candidate.latest.trade_status, "UNKNOWN")

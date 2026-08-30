@@ -11,6 +11,7 @@
     "artifact_id",
     "status",
     "writer_mode",
+    "method_id",
     "data_mode",
     "pit_quality",
     "workflow",
@@ -19,6 +20,7 @@
     "analysis_hash",
     "counts",
     "focus",
+    "candidate_index",
     "warnings",
     "gaps",
     "research_queue_count",
@@ -32,6 +34,7 @@
     "artifact_id": { "type": "string" },
     "status": { "const": "completed" },
     "writer_mode": { "const": "engine" },
+    "method_id": { "const": "a-share-theme-v2.0" },
     "data_mode": { "enum": ["fixture", "snapshot"] },
     "pit_quality": {
       "enum": ["FIXTURE", "P1", "P2", "P3", "RECONSTRUCTED_NON_PIT"]
@@ -43,7 +46,43 @@
     "snapshot_id": { "type": "string" },
     "analysis_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "counts": { "type": "object" },
-    "focus": { "type": "array" },
+    "focus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "symbol",
+          "name",
+          "decision",
+          "attention_score",
+          "attention_bucket",
+          "opportunity_view",
+          "new_information",
+          "economic_impact",
+          "expectation_gap",
+          "market_pricing"
+        ],
+        "properties": {
+          "attention_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "attention_bucket": { "enum": ["deep_dive", "monitor", "backlog", "closed"] },
+          "opportunity_view": { "enum": ["positive", "neutral", "negative", "unclear"] }
+        }
+      }
+    },
+    "candidate_index": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate_id", "symbol", "canonical_state"],
+        "properties": {
+          "candidate_id": { "type": "string", "minLength": 1 },
+          "symbol": { "type": "string", "minLength": 1 },
+          "canonical_state": { "enum": ["exclude", "continue_research", "observe"] }
+        }
+      }
+    },
     "warnings": { "type": "array", "items": { "type": "string" } },
     "gaps": { "type": "array", "items": { "type": "string" } },
     "research_queue_count": { "type": "integer", "minimum": 0 },
