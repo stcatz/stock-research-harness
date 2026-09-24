@@ -67,6 +67,7 @@ class FakeEnrichment:
     def __init__(self, retrieved_at: datetime) -> None:
         self.retrieved_at = retrieved_at
         self.latest_session = date(2026, 8, 17)
+        self.theme_discoveries: tuple[Any, ...] = ()
         self.data_gaps = {"600000.SH": ("pe_mrq is UNKNOWN",)}
 
     def evidence_fragments(self) -> list[dict[str, Any]]:
@@ -239,6 +240,7 @@ class SnapshotBuilderTests(unittest.TestCase):
             client,
             latest_session=date(2026, 8, 17),
             candidate_thscodes=("600000.SH",),
+            full_market_limit=6000,
         )
         self.assertEqual(result.provider_name, "hithink-financial-api")
 
@@ -259,6 +261,7 @@ class SnapshotBuilderTests(unittest.TestCase):
             _research_seed()["themes"][0]["candidates"][0]["data_gaps"],
         )
         self.assertEqual(raw["provider_data_gaps"], {"600000.SH": ["pe_mrq is UNKNOWN"]})
+        self.assertEqual(raw["market_discoveries"], [])
         self.assertIn("MKT-HITHINK-BREADTH-20260817", raw["market_context"]["evidence_refs"])
         self.assertIn(
             "MKT-HITHINK-SH-000001-20260817",

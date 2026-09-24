@@ -647,7 +647,7 @@ def _evidence_fragment(
             "average_amount_5_sessions": average_amount,
             "derivation_note": DERIVATION_NOTE,
         },
-        "calculation_window": [bar.to_dict() for bar in instrument.bars[-MINIMUM_ACTIVE_SESSIONS:]],
+        "calculation_window": [bar.to_dict() for bar in instrument.bars],
         "pit_quality": "RECONSTRUCTED_NON_PIT",
         "non_pit_notice": NON_PIT_NOTICE,
         "coverage_note": (

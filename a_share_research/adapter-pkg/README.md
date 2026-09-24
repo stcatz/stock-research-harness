@@ -23,7 +23,9 @@
   - `artifact_id`
   - `section?`: `summary | report | manifest | packet`
     - 用户要求完整报告时必须读取 `report`；`summary` 只是紧凑预览，不能当作完整报告返回。
-  - `max_chars?`
+  - `max_chars?`、`offset?`（Unicode 字符偏移）。原样拼接各页，按返回的 `next_offset` 继续至 `truncated=false`；不得去除页面空白。
+
+运行摘要中的 `data_readiness` 表示行情日期状态；`completed` 只代表程序完成。新的预期登记和多期限复盘通过本机 CLI 进入，见 [研究反馈 v1](../docs/RESEARCH_FEEDBACK.md)。
 
 本包包含：
 

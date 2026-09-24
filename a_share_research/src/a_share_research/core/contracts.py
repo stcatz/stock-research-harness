@@ -191,11 +191,12 @@ class ArtifactReadRequest:
     artifact_id: str
     section: str
     max_chars: int
+    offset: int = 0
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ArtifactReadRequest:
         data = require_mapping(raw, "request")
-        _reject_unknown_fields(data, {"artifact_id", "section", "max_chars"}, "request")
+        _reject_unknown_fields(data, {"artifact_id", "section", "max_chars", "offset"}, "request")
         artifact_id = require_string(data.get("artifact_id"), "artifact_id")
         if not _is_safe_identifier(artifact_id):
             raise ContractError("artifact_id contains unsupported characters")
@@ -209,7 +210,10 @@ class ArtifactReadRequest:
             or not 500 <= max_chars <= 20000
         ):
             raise ContractError("max_chars must be an integer between 500 and 20000")
-        return cls(artifact_id=artifact_id, section=section, max_chars=max_chars)
+        offset = data.get("offset", 0)
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ContractError("offset must be a non-negative integer")
+        return cls(artifact_id=artifact_id, section=section, max_chars=max_chars, offset=offset)
 
 
 def _is_safe_identifier(value: str) -> bool:

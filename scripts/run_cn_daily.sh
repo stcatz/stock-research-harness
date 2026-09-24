@@ -308,7 +308,7 @@ esac
 printf 'run_cn_daily: reading the complete report artifact\n' >&2
 if ! printf '%s\n' \
     "{\"artifact_id\":\"$ARTIFACT_ID\",\"section\":\"report\",\"max_chars\":20000}" \
-    | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" artifact-read --request-json - \
+    | "$PYTHON" -m a_share_research.cli --workspace "$ROOT" artifact-read --complete --request-json - \
         >"$TMP_DIR/report.json" 2>"$TMP_DIR/report.stderr"; then
   die "artifact read failed; no report was emitted"
 fi

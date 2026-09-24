@@ -12,6 +12,11 @@
 - SQLite 运行索引与包含排除样本的决策记录；
 - 不可变 run 目录、文件哈希和稳定 manifest hash；
 - Markdown/JSON 报告；
+- 行情新鲜度与候选自身交易日校验、完整报告分页回读；
+- 固定强弱组/题材成员、T+1/T+5/T+20 研究反馈和追加式预期登记；
+- 保留全市场现价横截面与完整特色池，区分当前观察、历史累计反馈和过期催化；
+- 日报顶部自动生成下一交易日计划卡：具体名单、检查点、支持/反方条件及研究动作；盘中观察仍由人工完成；
+- 单条件 R0/R1 影子排序对照（效果尚未验证，正式排序保持 R0）；
 - DeepSeek Harness 原生 Cordis 工具适配器；
 - 无券商、账户、订单或自动交易能力。
 
@@ -123,6 +128,8 @@ printf '%s' '{
 
 CLI 运行根目录可通过 `--workspace` 或 `STOCK_RESEARCH_WORKSPACE` 指定。DSH 工具结果只返回相对路径、短摘要和 opaque ID。
 
+读取长报告时，按返回的 `next_offset` 继续请求，直至 `truncated=false`，保留页面首尾空白。本机导出可添加 `artifact-read --complete`；每日 wrapper 已采用完整导出。研究反馈、日历输入、预期登记及实验边界见 [研究反馈、市场观察与计划卡](docs/RESEARCH_FEEDBACK.md)。
+
 ## 采集真实 A 股快照
 
 研究引擎运行时仍然只读取冻结 snapshot；联网只发生在显式的 `collect-snapshot` 或 `provider-probe` 命令中。`collect-snapshot` 把研究员维护的政策、公告、题材和候选 seed，与选定 provider 的结构化市场数据合并，验证后原子发布到 `data/normalized/<snapshot_id>/snapshot.json`。默认 provider 仍是 BaoStock；显式选择 `hithink` 时会使用同花顺 Financial API。
@@ -172,10 +179,11 @@ HiThink 模式会采集：
 - 候选股和上证综指、深证成指、创业板指的不复权日线；
 - 全市场上涨、下跌、平盘、无成交家数和成交额；
 - 涨停、跌停、炸板池及候选命中；
+- 对完整涨停池的 `+` 分隔原因标签做重复聚类；剔除“中报增长/扭亏”等非题材业绩标签后，同一标签至少命中 3 只涨停股时，作为 `continue_research` 市场线索写入快照和日报；
 - 候选最新估值快照；
 - 候选最近两个可对齐年度的利润表、资产负债表和现金流量表字段。
 
-所有 provider 缺失值都保留为 `UNKNOWN`，财务三表只在相同 `period_end` 上连接；供应商给出的涨停原因只是 `provider_derived_unverified`，不能替代公司公告。HiThink 的结构化数据始终标为 `structured_market`，不会满足“至少一条官方证据”的门槛。
+所有 provider 缺失值都保留为 `UNKNOWN`，财务三表只在相同 `period_end` 上连接；供应商给出的涨停原因及其重复标签聚类只是 `provider_derived_unverified`，不能替代公司公告，也不会自动晋升为正式研究题材。HiThink 的结构化数据始终标为 `structured_market`，不会满足“至少一条官方证据”的门槛。
 
 成功响应会以不可覆盖方式保存到仓库外的私有审计目录。默认位置为：
 
@@ -222,6 +230,6 @@ wrapper 只接受本次新建的 snapshot；若显式或自动生成的 `decisio
 
 ## 当前边界
 
-`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值和年度三表，但仍不提供官方公告抓取、严格 PIT、自动主题发现或数据再分发授权。上游根仓库有 MIT LICENSE，但其 Python 子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。任何代码许可证都不自动授予数据的商业使用或再分发权。
+`run`、`artifact-read` 和 DSH 适配器仍是离线的；只有显式的 `collect-snapshot` 和 `provider-probe` 会联网。BaoStock 模式只补候选和三只宽基指数日线；HiThink 模式增加全市场宽度、特色池、估值、年度三表和供应商标签聚类线索，但仍不自动抓取官方公告、不把未经核验的聚类线索晋升为正式题材，也不提供严格 PIT 或数据再分发授权。上游根仓库有 MIT LICENSE，但其 Python 子项目元数据和实际数据访问授权需要分别核对；本项目不复制上游 SDK 代码，只调用公开 REST 合同。任何代码许可证都不自动授予数据的商业使用或再分发权。
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。

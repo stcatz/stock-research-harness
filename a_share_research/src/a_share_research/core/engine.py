@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from .contracts import (
@@ -14,6 +15,9 @@ from .contracts import (
     parse_datetime,
 )
 from .snapshot import ValidatedSnapshot
+from .feedback_metrics import build_feedback, expected_session, security_code
+from .market_diagnostics import build_market_diagnostics
+from .observation_plan import build_observation_plan
 from .utils import sha256_value
 
 DECISION_ORDER = {"observe": 0, "continue_research": 1, "exclude": 2}
@@ -21,6 +25,7 @@ ROLE_ORDER = {"core": 0, "midcap": 1, "elastic": 2, "follower": 3}
 HARD_RISK_FLAGS = {"ST", "SUSPENDED", "REGULATORY_MAJOR", "LIQUIDITY_INSUFFICIENT"}
 OFFICIAL_CATEGORIES = {"official_event", "company_disclosure", "policy", "regulatory"}
 METHOD_ID = "a-share-theme-v1"
+ENGINE_VERSION = "cn-plan-v3.0"
 
 
 def build_research_packet(
@@ -31,6 +36,7 @@ def build_research_packet(
 ) -> dict[str, Any]:
     selected_themes = _select_themes(snapshot.themes, request)
     stable_seed = {
+        "engine_version": ENGINE_VERSION,
         "request": request.to_dict(),
         "snapshot_hash": snapshot.snapshot_hash,
     }
@@ -93,6 +99,7 @@ def build_research_packet(
         "market": MARKET,
         "writer_mode": "engine",
         "method_id": METHOD_ID,
+        "engine_version": ENGINE_VERSION,
         "run_id": run_id,
         "artifact_id": artifact_id,
         "workflow": request.workflow,
@@ -105,7 +112,12 @@ def build_research_packet(
         "data_mode": snapshot.data_mode,
         "pit_quality": snapshot.pit_quality,
         "data_status": data_status,
-        "market_context": deepcopy(snapshot.data["market_context"]),
+        "research_feedback": build_feedback(snapshot.data, decisions, request.decision_at, request.top_n),
+        "market_diagnostics": build_market_diagnostics(snapshot.data, decisions, request.decision_at),
+        "market_context": _timely_context(snapshot, request),
+        "market_discoveries": [deepcopy(item) for item in snapshot.data.get("market_discoveries", [])
+                               if _refs_available(snapshot, request, [item.get("evidence_ref")])],
+        "market_discovery_input_count": len(snapshot.data.get("market_discoveries", [])),
         "themes": theme_summaries,
         "focus": focus,
         "excluded": excluded,
@@ -115,6 +127,10 @@ def build_research_packet(
             gap for item in decisions for gap in item.get("data_gaps", [])
         ),
     }
+    packet_without_hash['observation_plan'] = build_observation_plan(
+        snapshot.data, decisions, packet_without_hash['market_diagnostics'],
+        packet_without_hash['market_discoveries'], request.decision_at,
+    )
     stable_packet = deepcopy(packet_without_hash)
     stable_packet.pop("generated_at", None)
     packet_without_hash["analysis_hash"] = sha256_value(stable_packet)
@@ -182,7 +198,23 @@ def _evaluate_candidate(
 
     risk_flags = list(candidate.get("risk_flags", []))
     data_gaps = _unique_strings([*theme.get("data_gaps", []), *candidate.get("data_gaps", [])])
+    readiness = _market_readiness(snapshot, request)
+    if readiness != "CURRENT_SESSION" and snapshot.data_mode != "fixture":
+        data_gaps.append("MARKET_SESSION_" + readiness)
     next_catalyst_at = parse_datetime(theme["next_catalyst_at"], "theme.next_catalyst_at")
+    target_session = parse_datetime(snapshot.data["as_of"],"snapshot.as_of").astimezone(
+        ZoneInfo("Asia/Shanghai")).date().isoformat()
+    own_session = any(
+        e.get("provider",{}).get("frequency") == "1d"
+        and e.get("instrument",{}).get("code") == security_code(candidate["security_id"])
+        and e.get("latest",{}).get("date") == target_session
+        and parse_datetime(e["as_of"],"evidence.as_of").astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat() == target_session
+        and parse_datetime(e["as_of"],"evidence.as_of").astimezone(ZoneInfo("Asia/Shanghai")).hour >= 15
+        and parse_datetime(e["as_of"],"evidence.as_of") <= request.decision_at
+        for e in structured_market
+    )
+    if not own_session and snapshot.data_mode != "fixture":
+        data_gaps.append("CANDIDATE_SESSION_UNVERIFIED")
     gates = {
         "official_event": bool(official_evidence),
         "structured_market": bool(structured_market),
@@ -194,6 +226,7 @@ def _evaluate_candidate(
         "next_catalyst": next_catalyst_at > request.decision_at,
         "time_boundary": not time_leak_refs,
         "stage_not_declining": theme["stage"] != "declining",
+        "market_freshness": (readiness == "CURRENT_SESSION" and own_session) or snapshot.data_mode == "fixture",
     }
 
     reasons: list[str] = []
@@ -213,6 +246,8 @@ def _evaluate_candidate(
         reasons.append("命中硬风险标志")
     if not gates["next_catalyst"]:
         reasons.append("下一催化时间不晚于研究时点或不可用")
+    if not gates["market_freshness"]:
+        reasons.append("行情时点过期或尚未验证最新交易日，不能升级为观察")
     if not company_disclosure:
         reasons.append("缺少候选公司自身正式披露，业务纯度需人工复核")
     if candidate.get("data_gaps"):
@@ -233,6 +268,7 @@ def _evaluate_candidate(
         or theme_timely in {"weak", "unknown"}
         or not gates["time_boundary"]
         or not gates["next_catalyst"]
+        or not gates["market_freshness"]
         or not company_disclosure
         or bool(candidate.get("data_gaps"))
     ):
@@ -249,6 +285,7 @@ def _evaluate_candidate(
         "theme_name": theme["name"],
         "event_type": theme["event_type"],
         "stage": theme["stage"],
+        "stage_provenance": "seed_assertion_not_computed",
         "security_id": candidate["security_id"],
         "symbol": candidate["symbol"],
         "name": candidate["name"],
@@ -321,14 +358,60 @@ def _data_status(
         for item in used
         if item["source_level"] == "structured_market"
     ]
+    available_inputs = [e for e in snapshot.data["evidence"]
+                        if parse_datetime(e["available_at"],"available_at") <= request.decision_at]
+    daily_times = [parse_datetime(e["as_of"],"as_of") for e in available_inputs
+                   if e.get("provider",{}).get("frequency") == "1d"]
     return {
+        "readiness": _market_readiness(snapshot, request),
         "decision_at": request.decision_at.isoformat(),
         "snapshot_as_of": snapshot.data["as_of"],
         "snapshot_retrieved_at": snapshot.data["retrieved_at"],
         "latest_official_available_at": max(official_times).isoformat() if official_times else None,
         "latest_market_as_of": max(market_times).isoformat() if market_times else None,
+        "latest_daily_market_as_of": max(daily_times).isoformat() if daily_times else None,
+        "latest_input_available_at": max(parse_datetime(e["available_at"],"available_at")
+                                           for e in available_inputs).isoformat() if available_inputs else None,
+        "latest_input_retrieved_at": max(parse_datetime(e["retrieved_at"],"retrieved_at")
+                                           for e in available_inputs).isoformat() if available_inputs else None,
         "used_evidence_count": len(used),
     }
+
+
+def _market_readiness(snapshot: ValidatedSnapshot, request: RunRequest) -> str:
+    if snapshot.data_mode == "fixture":
+        return "FIXTURE"
+    cutoff = request.decision_at.astimezone(ZoneInfo("Asia/Shanghai"))
+    observed = parse_datetime(snapshot.data["as_of"], "snapshot.as_of").astimezone(
+        ZoneInfo("Asia/Shanghai")
+    )
+    if observed > cutoff or parse_datetime(snapshot.data["retrieved_at"],"snapshot.retrieved_at") > cutoff:
+        return "FUTURE_INPUT"
+    expected = expected_session(snapshot.data, cutoff)
+    if expected:
+        return "CURRENT_SESSION" if observed.date().isoformat() == expected else "STALE"
+    if observed.date() == cutoff.date() and observed.hour >= 15:
+        return "CURRENT_SESSION"
+    # This age cap flags stale input; it does not invent a weekday trading calendar.
+    if (cutoff - observed).total_seconds() > 96 * 3600:
+        return "STALE"
+    return "UNKNOWN_CALENDAR"
+
+
+def _refs_available(snapshot: ValidatedSnapshot, request: RunRequest, refs: list) -> bool:
+    return bool(refs) and all(
+        ref in snapshot.evidence_by_id and
+        parse_datetime(snapshot.evidence_by_id[ref]["available_at"],"available_at") <= request.decision_at
+        for ref in refs
+    )
+
+
+def _timely_context(snapshot: ValidatedSnapshot, request: RunRequest) -> dict:
+    context = snapshot.data["market_context"]
+    if _refs_available(snapshot, request, context["evidence_refs"]):
+        return deepcopy(context)
+    return {"regime":"UNKNOWN","breadth":"UNKNOWN","liquidity":"UNKNOWN",
+            "calculation_note":"输入背景缺少研究时点内可用的证据，文本已隐藏。","evidence_refs":[]}
 
 
 def _evidence_card(evidence: dict[str, Any]) -> dict[str, Any]:

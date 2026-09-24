@@ -124,10 +124,12 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
     _ensure_inside_artifact_store(workspace, path)
     relative_path = path.relative_to(workspace)
     content = path.read_text(encoding="utf-8")
-    truncated = len(content) > request.max_chars
-    if truncated:
-        marker = "\n…[truncated]"
-        content = content[: request.max_chars - len(marker)] + marker
+    total_chars = len(content)
+    if request.offset > total_chars:
+        raise ValueError("offset exceeds artifact length")
+    end = min(total_chars, request.offset + request.max_chars)
+    truncated = end < total_chars
+    content = content[request.offset:end]
     return {
         "schema_version": SCHEMA_VERSION,
         "market": "CN",
@@ -136,8 +138,55 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
         "content_type": "text/markdown" if request.section == "report" else "application/json",
         "content": content,
         "truncated": truncated,
+        "offset": request.offset,
+        "next_offset": end if truncated else None,
+        "total_chars": total_chars,
         "relative_path": relative_path.as_posix(),
     }
+
+
+def verified_research_packet(workspace: Path, artifact_id: str) -> dict[str, Any]:
+    """Internal full packet read for engine workflows, using the canonical integrity checks."""
+    ArtifactReadRequest.from_dict({"artifact_id": artifact_id})
+    workspace = workspace.resolve()
+    record = artifact_record(workspace, artifact_id)
+    if record is None:
+        raise KeyError("artifact not found")
+    run_dir = (workspace / record["run_dir"]).resolve()
+    _ensure_inside_artifact_store(workspace, run_dir)
+    with run_lock(workspace, record["run_id"]):
+        manifest, _, packet = _verify_complete_run(workspace, run_dir)
+        if manifest["artifact_id"] != artifact_id or packet["artifact_id"] != artifact_id:
+            raise RuntimeError("artifact identity mismatch")
+        return packet
+
+
+def read_complete_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, Any]:
+    request = ArtifactReadRequest.from_dict(raw_request)
+    if request.offset:
+        raise ValueError("complete artifact export must start at offset zero")
+    chunks, offset = [], 0
+    while True:
+        page = read_artifact(dict(raw_request) | {"offset":offset}, workspace)
+        chunks.append(page["content"])
+        if not page["truncated"]:
+            break
+        offset = page["next_offset"]
+    content = "".join(chunks)
+    if len(content) != page["total_chars"]:
+        raise RuntimeError("complete artifact export length mismatch")
+    return page | {"content":content,"offset":0,"next_offset":None,"truncated":False,
+                   "full_report_verified":True}
+
+
+def verified_snapshot(workspace: Path, artifact_id: str) -> dict[str, Any]:
+    packet = verified_research_packet(workspace, artifact_id)
+    path = (workspace.resolve() / "artifacts/runs" / packet["run_id"] / "snapshot.json").resolve()
+    _ensure_inside_artifact_store(workspace.resolve(), path)
+    data = read_json(path)
+    if sha256_value(data) != packet["snapshot_hash"]:
+        raise RuntimeError("frozen snapshot hash mismatch")
+    return data
 
 
 def doctor(workspace: Path) -> dict[str, Any]:
@@ -169,6 +218,7 @@ def _build_summary(packet: dict[str, Any]) -> dict[str, Any]:
         "run_id": packet["run_id"],
         "artifact_id": packet["artifact_id"],
         "status": "completed",
+        "data_readiness": packet["data_status"].get("readiness", "UNKNOWN"),
         "writer_mode": "engine",
         "data_mode": packet["data_mode"],
         "pit_quality": packet["pit_quality"],

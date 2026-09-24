@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import math
 import re
+from hashlib import sha256
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -43,6 +44,7 @@ HITHINK_FINANCIAL_ENDPOINTS: Mapping[str, str] = MappingProxyType(
 HITHINK_PUBLIC_SOURCE_URL = "https://fuyao.aicubes.cn/docs/"
 HITHINK_PROVIDER_NAME = "hithink-financial-api"
 HITHINK_PROVIDER_VERSION = "public-api-unversioned"
+HITHINK_FULL_MARKET_LIMIT = 6000
 HITHINK_NON_PIT_NOTICE = (
     "The provider exposes no immutable first-published vintage. available_at is the first "
     "local retrieval time and upstream timestamp is retained as metadata only."
@@ -53,6 +55,7 @@ _THSCODE_PATTERN = re.compile(r"[0-9]{6}\.(?:SH|SZ|BJ)\Z")
 _IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
 _SAFE_ENDPOINT_PATTERN = re.compile(r"/api/[A-Za-z0-9_/-]+\Z")
+_UPSTREAM_CLOCK_SKEW_TOLERANCE = timedelta(seconds=1)
 
 _VALUATION_FIELDS: tuple[str, ...] = ("pe_ttm", "pe_mrq", "pb_mrq", "ps_ttm", "pcf_ttm")
 _FINANCIAL_FIELDS: Mapping[str, tuple[tuple[str, str], ...]] = MappingProxyType(
@@ -116,6 +119,15 @@ _POOL_SORT_FIELDS = {
     "limit_down": "last_limit_time",
     "limit_break": "price_change_ratio_pct",
 }
+_NON_THEME_DISCOVERY_LABELS = frozenset(
+    {
+        "业绩增长",
+        "中报增长",
+        "中报扭亏",
+        "半年报增长",
+        "半年报扭亏",
+    }
+)
 
 
 class HiThinkEnrichmentError(CollectionError):
@@ -179,6 +191,28 @@ class EnrichmentFact:
 
 
 @dataclass(frozen=True)
+class MarketObservation:
+    """Normalized current quote, never a fabricated dated daily bar."""
+    code: str
+    reported_change_pct: Decimal | None
+    last_price: Decimal | None
+    reference_price: Decimal | None
+    volume: Decimal | None
+    amount: Decimal | None
+    response_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        observed = self.volume is not None and self.volume > 0 and self.reported_change_pct is not None
+        return {"code":self.code,"reported_change_pct":_format_decimal(self.reported_change_pct) if observed else None,
+                "last_price":_format_decimal(self.last_price) if self.last_price is not None else None,
+                "reference_price":_format_decimal(self.reference_price) if self.reference_price is not None else None,
+                "volume":_format_decimal(self.volume) if self.volume is not None else None,
+                "amount":_format_decimal(self.amount) if self.amount is not None else None,
+                "observation_status":"OBSERVED" if observed else "NO_TRADE_OR_MISSING",
+                "trade_status":"UNKNOWN","source_response_id":self.response_id}
+
+
+@dataclass(frozen=True)
 class FullMarketBreadth:
     latest_session: date
     upstream_timestamp_ms: int
@@ -189,6 +223,7 @@ class FullMarketBreadth:
     no_trade: int
     turnover_total: Decimal
     sources: tuple[ProviderResponseRef, ...]
+    observations: tuple[MarketObservation, ...] = ()
 
     @property
     def traded(self) -> int:
@@ -276,6 +311,43 @@ class CandidatePoolRecord:
 
 
 @dataclass(frozen=True)
+class ThemeDiscovery:
+    """A repeated provider-derived limit-up label that requires editorial verification."""
+
+    label: str
+    records: tuple[CandidatePoolRecord, ...]
+    latest_session: date
+
+    @property
+    def evidence_id(self) -> str:
+        label_hash = sha256(self.label.encode("utf-8")).hexdigest()[:12].upper()
+        return f"MKT-HITHINK-THEME-DISCOVERY-{label_hash}-{self.latest_session:%Y%m%d}"
+
+    @property
+    def available_at(self) -> datetime:
+        return max(record.source.retrieved_at for record in self.records)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "status": "continue_research",
+            "classification": "provider_derived_unverified",
+            "member_count": len(self.records),
+            "members": [
+                {
+                    "thscode": record.thscode,
+                    "name": record.name,
+                    "pool": record.pool,
+                }
+                for record in self.records
+            ],
+            "evidence_ref": self.evidence_id,
+            "as_of": _session_close(self.latest_session).isoformat(),
+            "available_at": self.available_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
 class CandidateValuation:
     thscode: str
     name: str | None
@@ -340,9 +412,11 @@ class EnrichmentResult:
     breadth: FullMarketBreadth
     pool_summary: SpecialPoolSummary
     candidate_pool_records: tuple[CandidatePoolRecord, ...]
+    theme_discoveries: tuple[ThemeDiscovery, ...]
     valuations: tuple[CandidateValuation, ...]
     financial_periods: tuple[FinancialPeriod, ...]
     data_gaps: Mapping[str, tuple[str, ...]]
+    all_pool_records: tuple[CandidatePoolRecord, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -354,9 +428,10 @@ class EnrichmentResult:
     def evidence_fragments(self) -> list[dict[str, Any]]:
         fragments = [
             _breadth_evidence(self.breadth),
-            _pool_summary_evidence(self.pool_summary),
+            _pool_summary_evidence(self.pool_summary, self.all_pool_records),
         ]
         fragments.extend(_pool_record_evidence(record) for record in self.candidate_pool_records)
+        fragments.extend(_theme_discovery_evidence(item) for item in self.theme_discoveries)
         fragments.extend(_valuation_evidence(record) for record in self.valuations)
         fragments.extend(_financial_evidence(record) for record in self.financial_periods)
         return fragments
@@ -404,6 +479,7 @@ class EnrichmentResult:
             "breadth": self.breadth.to_dict(),
             "pool_summary": self.pool_summary.to_dict(),
             "candidate_pool_records": [item.to_dict() for item in self.candidate_pool_records],
+            "theme_discoveries": [item.to_dict() for item in self.theme_discoveries],
             "valuations": [item.to_dict() for item in self.valuations],
             "financial_periods": [item.to_dict() for item in self.financial_periods],
             "data_gaps": {code: list(gaps) for code, gaps in self.data_gaps.items()},
@@ -441,6 +517,7 @@ def collect_hithink_enrichment(
     latest_session: date,
     candidate_thscodes: Sequence[str],
     page_size: int = 200,
+    full_market_limit: int | None = None,
 ) -> EnrichmentResult:
     """Collect fail-closed, evidence-ready enrichment for one known trading session."""
 
@@ -448,6 +525,14 @@ def collect_hithink_enrichment(
         raise TypeError("latest_session must be a date")
     if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 200:
         raise ValueError("page_size must be an integer in [1, 200]")
+    if full_market_limit is None:
+        full_market_limit = page_size
+    if (
+        isinstance(full_market_limit, bool)
+        or not isinstance(full_market_limit, int)
+        or not 1 <= full_market_limit <= 10_000
+    ):
+        raise ValueError("full_market_limit must be an integer in [1, 10000]")
     candidates = _normalize_candidates(candidate_thscodes)
     gateway = _Gateway(client)
     gaps: dict[str, list[str]] = {code: [] for code in candidates}
@@ -456,15 +541,17 @@ def collect_hithink_enrichment(
         gateway,
         latest_session=latest_session,
         candidates=candidates,
-        page_size=page_size,
+        page_size=full_market_limit,
     )
-    pool_summary, pool_records = _collect_special_pools(
+    pool_summary, all_pool_records = _collect_special_pools(
         gateway,
         latest_session=latest_session,
         candidates=set(candidates),
         page_size=page_size,
         gaps=gaps,
     )
+    pool_records = [record for record in all_pool_records if record.thscode in candidates]
+    theme_discoveries = _discover_limit_up_themes(all_pool_records)
     valuations = _collect_valuations(
         gateway,
         latest_session=latest_session,
@@ -485,6 +572,8 @@ def collect_hithink_enrichment(
         breadth=breadth,
         pool_summary=pool_summary,
         candidate_pool_records=tuple(pool_records),
+        all_pool_records=tuple(all_pool_records),
+        theme_discoveries=tuple(theme_discoveries),
         valuations=tuple(valuations),
         financial_periods=tuple(financial_periods),
         data_gaps={code: tuple(items) for code, items in gaps.items()},
@@ -505,6 +594,7 @@ def _collect_full_market_breadth(
     sources: list[ProviderResponseRef] = []
     advancing = declining = unchanged = no_trade = 0
     turnover_total = Decimal(0)
+    observations: list[MarketObservation] = []
 
     while True:
         data, source = gateway.get(
@@ -536,8 +626,25 @@ def _collect_full_market_breadth(
                 raise HiThinkEnrichmentError(f"prices snapshot contains duplicate thscode: {code}")
             seen.add(code)
             _validate_ticker(item.get("ticker"), code, f"prices snapshot.item[{index}].ticker")
-            volume = _required_decimal(item.get("volume"), f"prices snapshot {code}.volume")
-            turnover = _required_decimal(item.get("turnover"), f"prices snapshot {code}.turnover")
+            raw_volume = item.get("volume")
+            raw_turnover = item.get("turnover")
+            observations.append(MarketObservation(
+                code=code[-2:].lower()+'.'+code[:6],
+                reported_change_pct=_optional_decimal(item.get('price_change_ratio_pct'),f'{code}.price_change_ratio_pct'),
+                last_price=_optional_decimal(item.get('last_price'),f'{code}.last_price'),
+                reference_price=_optional_decimal(item.get('prev_price'),f'{code}.prev_price'),
+                volume=_optional_decimal(raw_volume,f'{code}.volume'),
+                amount=_optional_decimal(raw_turnover,f'{code}.turnover'),response_id=source.request_id,
+            ))
+            if raw_volume is None and raw_turnover is None:
+                no_trade += 1
+                continue
+            if raw_volume is None or raw_turnover is None:
+                raise HiThinkEnrichmentError(
+                    f"prices snapshot {code} volume and turnover must be jointly observable"
+                )
+            volume = _required_decimal(raw_volume, f"prices snapshot {code}.volume")
+            turnover = _required_decimal(raw_turnover, f"prices snapshot {code}.turnover")
             if volume < 0 or turnover < 0:
                 raise HiThinkEnrichmentError(
                     f"prices snapshot {code} volume and turnover must be nonnegative"
@@ -583,6 +690,7 @@ def _collect_full_market_breadth(
         no_trade=no_trade,
         turnover_total=turnover_total,
         sources=tuple(sources),
+        observations=tuple(sorted(observations,key=lambda row:row.code[3:]+row.code[:2])),
     )
 
 
@@ -611,8 +719,6 @@ def _collect_special_pools(
         all_sources.extend(sources)
         for item, source in rows:
             code = _required_thscode(item.get("thscode"), f"{pool}.item.thscode")
-            if code not in candidates:
-                continue
             facts = [
                 _fact(
                     fact_id=f"FACT-HITHINK-{_safe_code(code)}-{pool.upper()}-MEMBERSHIP-{latest_session:%Y%m%d}",
@@ -640,7 +746,7 @@ def _collect_special_pools(
                         source_field=field,
                     )
                 )
-                if value is None:
+                if value is None and code in candidates:
                     gaps[code].append(f"{pool} provider row is missing {field}")
             name = _optional_text(item.get("name"), f"{pool} {code}.name")
             reason = None
@@ -668,6 +774,42 @@ def _collect_special_pools(
         ),
         records,
     )
+
+
+def _discover_limit_up_themes(
+    records: Sequence[CandidatePoolRecord],
+    *,
+    minimum_members: int = 3,
+) -> list[ThemeDiscovery]:
+    """Group exact ``+``-delimited provider labels without treating them as official facts."""
+
+    if isinstance(minimum_members, bool) or not isinstance(minimum_members, int):
+        raise TypeError("minimum_members must be an integer")
+    if minimum_members < 2:
+        raise ValueError("minimum_members must be at least 2")
+    grouped: dict[str, dict[str, CandidatePoolRecord]] = {}
+    for record in records:
+        if record.pool != "limit_up" or not record.provider_reason:
+            continue
+        labels = {
+            item.strip()
+            for item in record.provider_reason.split("+")
+            if item.strip() and item.strip() not in _NON_THEME_DISCOVERY_LABELS
+        }
+        for label in labels:
+            grouped.setdefault(label, {})[record.thscode] = record
+
+    discoveries = [
+        ThemeDiscovery(
+            label=label,
+            records=tuple(sorted(members.values(), key=lambda item: item.thscode)),
+            latest_session=next(iter(members.values())).latest_session,
+        )
+        for label, members in grouped.items()
+        if len(members) >= minimum_members
+    ]
+    discoveries.sort(key=lambda item: (-len(item.records), item.label.casefold()))
+    return discoveries
 
 
 def _collect_one_pool(
@@ -1006,10 +1148,18 @@ def _breadth_evidence(breadth: FullMarketBreadth) -> dict[str, Any]:
                 "response-level latest valid data time; not a trading-session or EOD boundary"
             ),
         },
-    )
+    ) | {"cross_section":{
+        "schema_version":"cn-current-quotes-v1","universe":"provider_full_a_share_list",
+        "expected_count":breadth.total,"complete":len(breadth.observations)==breadth.total,
+        "time_semantics":"CURRENT_OBSERVATION_NOT_DATED_EOD",
+        "source_fields":{"reported_change_pct":"price_change_ratio_pct","reference_price":"prev_price",
+                         "amount":"turnover","last_price":"last_price","volume":"volume"},
+        "row_time_semantics":"Rows inherit evidence availability and retrieval; individual upstream time UNKNOWN",
+        "observations":[r.to_dict() for r in breadth.observations],
+    }}
 
 
-def _pool_summary_evidence(summary: SpecialPoolSummary) -> dict[str, Any]:
+def _pool_summary_evidence(summary: SpecialPoolSummary, records: tuple[CandidatePoolRecord, ...] = ()) -> dict[str, Any]:
     as_of = _session_close(summary.latest_session)
     available_at = max(source.retrieved_at for source in summary.sources)
     facts = tuple(
@@ -1044,7 +1194,14 @@ def _pool_summary_evidence(summary: SpecialPoolSummary) -> dict[str, Any]:
                 "provider data-ready time; not the selected trading date or fact effective_at"
             ),
         },
-    )
+    ) | {"pool_membership":{
+        "schema_version":"cn-dated-special-pools-v1","session":summary.latest_session.isoformat(),
+        "counts":dict(summary.counts),"rule_version":"UNKNOWN",
+        "complete":all(sum(r.pool==pool for r in records)==count for pool,count in summary.counts.items()),
+        "records":[{"code":r.thscode[-2:].lower()+'.'+r.thscode[:6],"name":r.name,"pool":r.pool,
+                    "reported_streak":next((f.value for f in r.facts if f.metric=='special_pool.limit_up.continue_day_cnt'),None),
+                    "provider_label":r.provider_reason,"source_response_id":r.source.request_id} for r in records],
+    }}
 
 
 def _pool_record_evidence(record: CandidatePoolRecord) -> dict[str, Any]:
@@ -1071,6 +1228,49 @@ def _pool_record_evidence(record: CandidatePoolRecord) -> dict[str, Any]:
             "upstream_timestamp_semantics": (
                 "provider data-ready time; not the selected trading date or fact effective_at"
             ),
+        },
+    )
+
+
+def _theme_discovery_evidence(discovery: ThemeDiscovery) -> dict[str, Any]:
+    as_of = _session_close(discovery.latest_session)
+    sources_by_request = {record.source.request_id: record.source for record in discovery.records}
+    sources = tuple(sources_by_request[key] for key in sorted(sources_by_request))
+    facts = tuple(
+        _fact(
+            fact_id=(
+                f"FACT-HITHINK-THEME-DISCOVERY-{discovery.evidence_id[-21:-9]}-"
+                f"{_safe_code(record.thscode)}-{discovery.latest_session:%Y%m%d}"
+            ),
+            metric="discovered_theme.limit_up_member",
+            value=record.thscode,
+            unit="security_id",
+            as_of=as_of,
+            available_at=record.source.retrieved_at,
+            source_field="limit_up_reason",
+        )
+        for record in discovery.records
+    )
+    member_names = [record.name or record.thscode for record in discovery.records]
+    return _evidence(
+        evidence_id=discovery.evidence_id,
+        title=f"同花顺涨停原因重复标签线索：{discovery.label}",
+        summary=(
+            f"供应商在 {len(discovery.records)} 只涨停股上重复标注“{discovery.label}”："
+            f"{'、'.join(member_names)}。该聚类只用于发现研究线索，标签未经官方核验。"
+        ),
+        as_of=as_of,
+        published_at=discovery.available_at,
+        available_at=discovery.available_at,
+        sources=sources,
+        facts=facts,
+        provider_extra={
+            "discovery_method": "exact_plus_delimited_label_minimum_three_limit_up_members",
+            "provider_label": discovery.label,
+            "members": [record.thscode for record in discovery.records],
+            "reason_classification": "provider_derived_unverified",
+            "official_evidence": False,
+            "session_selection": discovery.latest_session.isoformat(),
         },
     )
 
@@ -1245,7 +1445,7 @@ def _replace_gateway_source(
 ) -> ProviderResponseRef:
     if timestamp is not None:
         upstream_at = _datetime_from_ms(timestamp, "provider response.timestamp")
-        if upstream_at > source.retrieved_at.astimezone(UTC):
+        if upstream_at - source.retrieved_at.astimezone(UTC) >= _UPSTREAM_CLOCK_SKEW_TOLERANCE:
             raise HiThinkEnrichmentError("provider response.timestamp is later than retrieval time")
     enriched = replace(source, upstream_timestamp_ms=timestamp)
     gateway.sources[-1] = enriched

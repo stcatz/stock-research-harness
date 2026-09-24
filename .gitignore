@@ -36,3 +36,7 @@ us_equity_research/build/
 **/*_old/
 **/_legacy_copy_from_init/
 .deploy-backups/
+
+# Local-only offline library (third-party ebooks, ~84 GB). Never publish or commit.
+/2600/
+/2600/_catalog/

@@ -164,7 +164,7 @@ def _valid_responses(
             {
                 "timestamp": SESSION_TIMESTAMP_MS,
                 "total": 3,
-                "item": [_price("300001.SZ", ratio=0, volume=0, turnover=0)],
+                "item": [_price("300001.SZ", ratio=0, volume=None, turnover=None)],
             },
             request_id="prices-2",
             minute=2,
@@ -285,6 +285,22 @@ def _valid_responses(
 
 
 class HiThinkEnrichmentTests(unittest.TestCase):
+    def test_market_cross_section_and_all_pool_members_survive_normalization(self):
+        result = collect_hithink_enrichment(_QueueClient(_valid_responses()),
+                                           latest_session=SESSION,candidate_thscodes=['600519.SH'],page_size=2)
+        fragments=result.evidence_fragments()
+        cross=next(e['cross_section'] for e in fragments if 'cross_section' in e)
+        self.assertEqual(len(cross['observations']),3)
+        self.assertEqual(cross['observations'][0]['code'],'sz.000001')
+        missing=next(r for r in cross['observations'] if r['code']=='sz.300001')
+        self.assertEqual(missing['observation_status'],'NO_TRADE_OR_MISSING')
+        self.assertIsNone(missing['reported_change_pct'])
+        self.assertEqual(cross['time_semantics'],'CURRENT_OBSERVATION_NOT_DATED_EOD')
+        pools=next(e['pool_membership'] for e in fragments if 'pool_membership' in e)
+        self.assertEqual(len([r for r in pools['records'] if r['pool']=='limit_up']),3)
+        self.assertTrue(any(r['code']!='sh.600519' for r in pools['records']))
+        self.assertNotIn('must-not-leak',json.dumps(fragments))
+
     def test_collects_strict_market_breadth_and_evidence_ready_candidate_data(self) -> None:
         client = _QueueClient(_valid_responses())
 
@@ -383,6 +399,44 @@ class HiThinkEnrichmentTests(unittest.TestCase):
         ]
         self.assertTrue(all(params["date_ms"] == SESSION_DATE_MS for params in pool_calls))
         self.assertTrue(all("date" not in params for params in pool_calls))
+
+    def test_discovers_repeated_limit_up_labels_without_promoting_them_to_official_evidence(
+        self,
+    ) -> None:
+        responses = _valid_responses()
+        first_page = responses[HITHINK_POOL_ENDPOINTS["limit_up"]][0].data["item"]
+        second_page = responses[HITHINK_POOL_ENDPOINTS["limit_up"]][1].data["item"]
+        first_page[0]["limit_up_reason"] = "AI漫剧+半年报增长+供应商归因，不是公告证据"
+        first_page[1]["limit_up_reason"] = "AI漫剧+半年报增长+少儿内容"
+        second_page[0]["limit_up_reason"] = "AI漫剧+半年报增长+微短剧"
+
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        self.assertEqual(len(result.candidate_pool_records), 1)
+        discoveries = {item.label: item for item in result.theme_discoveries}
+        self.assertEqual(set(discoveries), {"AI漫剧"})
+        discovery = discoveries["AI漫剧"]
+        self.assertEqual(
+            [item.thscode for item in discovery.records],
+            ["000002.SZ", "000003.SZ", "600519.SH"],
+        )
+        serialized = discovery.to_dict()
+        self.assertEqual(serialized["status"], "continue_research")
+        self.assertEqual(serialized["classification"], "provider_derived_unverified")
+        evidence = next(
+            item
+            for item in result.evidence_fragments()
+            if item["evidence_id"] == discovery.evidence_id
+        )
+        self.assertEqual(evidence["source_level"], "structured_market")
+        self.assertFalse(evidence["provider"]["official_evidence"])
+        self.assertEqual(len(evidence["facts"]), 3)
+        self.assertNotIn("raw_body", json.dumps(evidence, ensure_ascii=False))
 
     def test_market_snapshot_fails_closed_on_incomplete_duplicate_or_inconsistent_pages(
         self,
@@ -582,6 +636,23 @@ class HiThinkEnrichmentTests(unittest.TestCase):
                         candidate_thscodes=["600519.SH"],
                         page_size=2,
                     )
+
+    def test_subsecond_provider_timestamp_quantization_is_tolerated(self) -> None:
+        responses = _valid_responses()
+        response = responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][0]
+        response.data["timestamp"] = int((response.retrieved_at.timestamp() + 0.5) * 1000)
+        responses[HITHINK_PRICES_SNAPSHOT_ENDPOINT][1].data["timestamp"] = response.data[
+            "timestamp"
+        ]
+
+        result = collect_hithink_enrichment(
+            _QueueClient(responses),
+            latest_session=SESSION,
+            candidate_thscodes=["600519.SH"],
+            page_size=2,
+        )
+
+        self.assertEqual(result.breadth.upstream_timestamp_ms, response.data["timestamp"])
 
     def test_full_market_snapshot_uses_local_observation_time_not_assumed_eod(self) -> None:
         responses = _valid_responses()

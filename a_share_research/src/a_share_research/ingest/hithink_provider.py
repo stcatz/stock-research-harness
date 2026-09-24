@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from .hithink_client import (
@@ -27,6 +27,8 @@ _INDEX_SNAPSHOT_ENDPOINT = "/api/a-share-index/prices/snapshot"
 _CANONICAL_SYMBOL_PATTERN = re.compile(r"(sh|sz|bj)\.(\d{6})\Z")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 _PCT_TOLERANCE = Decimal("0.0001")
+_AMOUNT_ROUNDING_TOLERANCE = Decimal("5")
+_AMOUNT_RELATIVE_TOLERANCE = Decimal("0.0000001")
 
 
 class HiThinkGetClient(Protocol):
@@ -81,6 +83,29 @@ class HiThinkProvider:
         history_response = self._get(history_endpoint, history_params)
         history_data = _response_data(history_response, history_endpoint)
         bars, upstream_timestamp = _parse_history(code, history_data)
+
+        history_retrieved = _response_retrieved_at(history_response, history_endpoint)
+        if bars[-1].trade_date != history_retrieved.date():
+            # An undated live quote cannot supply a reference price for a different session.
+            return DailySeries(
+                code=code, bars=bars,
+                session_statuses={bar.trade_date: UNKNOWN for bar in bars},
+                retrieved_at=history_retrieved,
+                metadata={
+                    "adapter": "hithink-financial-api",
+                    "history_endpoint": history_endpoint,
+                    "upstream_history_timestamp_ms": upstream_timestamp,
+                    "snapshot_cross_check": {
+                        "status": "NOT_COMPARABLE",
+                        "history_session": bars[-1].trade_date.isoformat(),
+                        "retrieval_date": history_retrieved.date().isoformat(),
+                        "note": "Undated current quote not requested for a historical session; "
+                                "reference preclose and daily change remain UNKNOWN.",
+                    },
+                    "raw_artifacts": [_response_artifact(history_response, history_endpoint)],
+                },
+                adjustment="none",
+            )
 
         snapshot_params = {"thscodes": thscode}
         snapshot_response = self._get(snapshot_endpoint, snapshot_params)
@@ -251,7 +276,18 @@ def _cross_check_latest_snapshot(
         "volume": _decimal(item.get("volume"), f"{thscode} snapshot.volume"),
         "amount": _decimal(item.get("turnover"), f"{thscode} snapshot.turnover"),
     }
-    mismatched = sorted(field for field in expected if expected[field] != snapshot[field])
+    price_fields = {"open", "high", "low", "close"}
+    mismatched = sorted(
+        field
+        for field in expected
+        if (
+            not _matches_reported_precision(expected[field], snapshot[field])
+            if field in price_fields
+            else not _amounts_match(expected[field], snapshot[field])
+            if field == "amount"
+            else expected[field] != snapshot[field]
+        )
+    )
     previous_close = _decimal(item.get("prev_price"), f"{thscode} snapshot.prev_price")
     pct_chg = _decimal(
         item.get("price_change_ratio_pct"),
@@ -283,10 +319,37 @@ def _cross_check_latest_snapshot(
         "status": "MATCHED",
         "matched_fields": sorted(expected),
         "note": (
-            "Explicit snapshot values match the latest historical bar. The snapshot carries no "
-            "session date, so this is a value cross-check rather than independent date evidence."
+            "Explicit snapshot values match the latest historical bar at their reported price "
+            "precision and bounded turnover rounding. The snapshot carries no session date, so "
+            "this is a value cross-check rather than independent date evidence."
         ),
     }
+
+
+def _matches_reported_precision(expected: Decimal, observed: Decimal) -> bool:
+    """Compare a higher-precision snapshot with the precision reported by history.
+
+    HiThink's index history currently reports three decimal places while its snapshot may
+    report four.  Quantizing the snapshot to the historical field's explicit precision keeps
+    the cross-check strict without treating ordinary provider rounding as a contradiction.
+    Integer-valued history remains exact because it does not establish a fractional precision.
+    """
+
+    if expected == observed:
+        return True
+    exponent = expected.as_tuple().exponent
+    if exponent >= 0:
+        return False
+    quantum = Decimal(1).scaleb(exponent)
+    return observed.quantize(quantum, rounding=ROUND_HALF_UP) == expected
+
+
+def _amounts_match(expected: Decimal, observed: Decimal) -> bool:
+    tolerance = max(
+        _AMOUNT_ROUNDING_TOLERANCE,
+        abs(expected) * _AMOUNT_RELATIVE_TOLERANCE,
+    )
+    return abs(expected - observed) <= tolerance
 
 
 def _response_artifact(response: Any, expected_endpoint: str) -> dict[str, Any]:

@@ -169,6 +169,86 @@ class HiThinkProviderTests(unittest.TestCase):
                 is_benchmark=False,
             )
 
+    def test_historical_session_does_not_import_undated_current_snapshot(self) -> None:
+        self.client.retrieved_times["historical"] = datetime(2026, 8, 18, 8, 0, tzinfo=SHANGHAI)
+        self.client.snapshot_overrides["600000.SH"] = {"last_price": 999}
+        series = self.provider.fetch_daily_series(
+            "sh.600000", start_date=date(2026, 7, 1), end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+        self.assertIsNone(series.bars[-1].preclose)
+        self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "NOT_COMPARABLE")
+        self.assertEqual(len(self.client.calls), 1)
+
+    def test_snapshot_price_precision_may_exceed_history_precision(self) -> None:
+        latest = self.client.histories["000001.SH"][-1]
+        latest.update(
+            {
+                "open_price": Decimal("110.001"),
+                "high_price": Decimal("112.001"),
+                "low_price": Decimal("109.001"),
+                "close_price": Decimal("111.001"),
+            }
+        )
+        snapshot_close = Decimal("111.0007")
+        previous_close = Decimal(str(self.client.histories["000001.SH"][-2]["close_price"]))
+        self.client.snapshot_overrides["000001.SH"] = {
+            "open_price": Decimal("110.0014"),
+            "high_price": Decimal("112.0014"),
+            "low_price": Decimal("109.0014"),
+            "last_price": snapshot_close,
+            "price_change_ratio_pct": (snapshot_close / previous_close - 1) * 100,
+        }
+
+        series = self.provider.fetch_daily_series(
+            "sh.000001",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=True,
+        )
+
+        self.assertEqual(series.bars[-1].close, Decimal("111.001"))
+        self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "MATCHED")
+
+    def test_snapshot_turnover_may_use_bounded_whole_currency_rounding(self) -> None:
+        latest = self.client.histories["600000.SH"][-1]
+        latest["turnover"] = Decimal("100010.84")
+        self.client.snapshot_overrides["600000.SH"] = {"turnover": Decimal("100010")}
+
+        series = self.provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+
+        self.assertEqual(series.bars[-1].amount, Decimal("100010.84"))
+
+    def test_snapshot_turnover_rounding_may_scale_with_large_amounts(self) -> None:
+        latest = self.client.histories["600000.SH"][-1]
+        latest["turnover"] = Decimal("6323920955.01")
+        self.client.snapshot_overrides["600000.SH"] = {"turnover": Decimal("6323921000")}
+
+        series = self.provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+
+        self.assertEqual(series.bars[-1].amount, Decimal("6323920955.01"))
+
+    def test_material_snapshot_turnover_mismatch_fails_closed(self) -> None:
+        self.client.snapshot_overrides["600000.SH"] = {"turnover": Decimal("100005")}
+
+        with self.assertRaisesRegex(CollectionError, "snapshot mismatch.*amount"):
+            self.provider.fetch_daily_series(
+                "sh.600000",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 8, 17),
+                is_benchmark=False,
+            )
+
     def test_snapshot_unavailable_fails_closed(self) -> None:
         self.client.snapshot_items_overrides["600000.SH"] = []
 

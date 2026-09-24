@@ -1,0 +1,21 @@
+{
+  "version": "cn-handoff-lessons-v1",
+  "source_status": "visible_user_request_only_original_attachment_missing",
+  "historical_market_facts": "UNVERIFIED",
+  "activation": "review_checks_only_no_automatic_method_change",
+  "lessons": [
+    {"id":"L01","type":"process_check","check":"主线研究优先级与观察条件分开","applies_when":"方向值得研究但时点风险较高","counterexample":"主线重要不能证明当前价格合适","test_intent":"不输出交易动作，不因观察条件不足抹掉主线价值"},
+    {"id":"L02","type":"process_check","check":"海外覆盖直接同行、需求方及竞争路线","applies_when":"国内主题依赖海外产业变化","counterexample":"海外个股因并购上涨不代表整个行业","test_intent":"缺少直接同行证据必须登记缺口，不能只列大盘和GPU公司"},
+    {"id":"L03","type":"process_check","check":"光互联、CPO、光模块、光纤、6G分别定义传导关系","applies_when":"光通信主题映射","counterexample":"数据中心光连接不等于6G无线接入","test_intent":"核对映射证据；不得预设CPO排名第一"},
+    {"id":"L04","type":"process_check","check":"已知日程与新信息分开","applies_when":"会议、财报等催化聚类","counterexample":"旧日程仍可能聚集关注，但不是当天新公告","test_intent":"保留首次可见时间，不重置新闻日期"},
+    {"id":"L05","type":"process_check","check":"政策、扩产、意向、合同、交付、收入、利润、现金流分开","applies_when":"从事件推演财务影响","counterexample":"意向订单可能没有交付或利润","test_intent":"每个传导环节独立证据；不足则UNKNOWN"},
+    {"id":"L06","type":"process_check","check":"昨日最强不直接等于今日风格","applies_when":"市场风格归因","counterexample":"单板块大涨可能只是事件冲击","test_intent":"检查全市场广度和多日证据；标明推断"},
+    {"id":"L07","type":"process_check","check":"缺历史涨幅、估值或预期时不宣称尚未定价","applies_when":"预期差分析","counterexample":"有新消息仍可能已提前上涨","test_intent":"缺少输入不能给出确定预期差"},
+    {"id":"L08","type":"process_check","check":"无分钟数据不做09:35路径判断","applies_when":"盘后检验盘中观察条件","counterexample":"日内最高最低无法确定发生顺序","test_intent":"intraday_result固定UNKNOWN直到独立粒度验收"},
+    {"id":"L09","type":"process_check","check":"每日记录误差，不每日改变规则","applies_when":"日常和周复盘","counterexample":"单日失误不足以证明权重应改","test_intent":"追加记录，拒绝覆盖原预测和生产配置参数"},
+    {"id":"L10","type":"process_check","check":"历史案例检验研究步骤，不强迫复现标的或排名","applies_when":"经验回归测试","counterexample":"未来同类事件可能利好不同公司","test_intent":"以证据覆盖、隔离和未知处理为准，不断言固定股票第一"}
+  ],
+  "market_hypotheses": [],
+  "withdrawn_hypotheses": [],
+  "notes": "以上10项来自实际可见需求。原附件声称13项经验与20项种子，但未取得原文。语义类检查仍需人工复核；不会伪称已自动执行。"
+}

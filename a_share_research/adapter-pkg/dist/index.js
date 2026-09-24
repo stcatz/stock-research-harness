@@ -203,17 +203,21 @@ function normalizeArtifactReadArgs(args) {
     rejectUnknownFields(raw, [
         'artifact_id',
         'section',
-        'max_chars'
+        'max_chars',
+        'offset'
     ], 'cn_artifact_read arguments');
     const artifactId = validateIdentifier(getString(raw.artifact_id, 'artifact_id') || '', 'artifact_id');
     const section = getString(raw.section, 'section') ?? 'summary';
     if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet') {
         throw new Error('section must be summary, report, manifest, or packet');
     }
+    const offset = getInteger(raw.offset, 'offset') ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset must be a non-negative integer');
     return {
         artifact_id: artifactId,
         section,
-        max_chars: clampMaxChars(raw.max_chars)
+        max_chars: clampMaxChars(raw.max_chars),
+        offset
     };
 }
 function sanitizeCliError(raw) {
@@ -398,6 +402,7 @@ export function sanitizeResearchRunResult(raw) {
         status,
         writer_mode: writerMode,
         data_mode: dataMode,
+        data_readiness: getString(payload.data_readiness, 'data_readiness'),
         pit_quality: pitQuality,
         workflow,
         decision_at: decisionAt,
@@ -427,9 +432,11 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     if (section !== 'summary' && section !== 'report' && section !== 'manifest' && section !== 'packet') {
         throw new Error('CLI artifact result returned an unsupported section');
     }
-    const content = getString(payload.content, 'content') || '';
+    if (typeof payload.content !== 'string') throw new Error('artifact content must be a string');
+    const content = payload.content;
+    const characters = Array.from(content);
     const marker = '\n…[truncated]';
-    const cappedContent = content.length > maxChars ? `${content.slice(0, Math.max(0, maxChars - marker.length))}${marker}` : content;
+    const cappedContent = characters.length > maxChars ? `${characters.slice(0, Math.max(0, maxChars - marker.length)).join('')}${marker}` : content;
     return omitUndefinedProperties({
         schema_version: getString(payload.schema_version, 'schema_version') || '0.1',
         market: 'CN',
@@ -437,7 +444,10 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
         section,
         content_type: getString(payload.content_type, 'content_type') || 'text/plain',
         content: cappedContent,
-        truncated: Boolean(getBoolean(payload.truncated, 'truncated') || content.length > maxChars),
+        truncated: Boolean(getBoolean(payload.truncated, 'truncated') || characters.length > maxChars),
+        offset: getInteger(payload.offset, 'offset'),
+        next_offset: characters.length <= maxChars ? getInteger(payload.next_offset, 'next_offset') : undefined,
+        total_chars: getInteger(payload.total_chars, 'total_chars'),
         relative_path: sanitizeRelativePath(payload.relative_path)
     });
 }
@@ -454,6 +464,7 @@ function renderResearchRun(value) {
         `decision_at: ${value.decision_at}`,
         `snapshot_id: ${value.snapshot_id}`,
         `data_mode: ${value.data_mode}`,
+        `data_readiness: ${value.data_readiness ?? 'UNKNOWN'}`,
         `pit_quality: ${value.pit_quality}`
     ];
     if (value.counts) {
@@ -487,6 +498,8 @@ function renderArtifactRead(value) {
         `section: ${value.section}`,
         `content_type: ${value.content_type}`,
         `truncated: ${String(value.truncated)}`,
+        `next_offset: ${value.next_offset ?? 'none'}`,
+        `total_chars: ${value.total_chars ?? 'unknown'}`,
         value.relative_path ? `relative_path: ${value.relative_path}` : '',
         '',
         value.content
@@ -521,7 +534,8 @@ export async function readArtifact(args, options = {}) {
     const request = {
         artifact_id: normalized.artifact_id,
         section: normalized.section,
-        max_chars: normalized.max_chars
+        max_chars: normalized.max_chars,
+        offset: normalized.offset
     };
     const raw = await callResearchCli('artifact-read', request, options);
     return sanitizeArtifactReadResult(raw, normalized.max_chars);
@@ -602,7 +616,7 @@ function registerResearchTool(ctx) {
 function registerArtifactTool(ctx) {
     return ctx.tools.register(defineTool({
         name: 'cn_artifact_read',
-        description: 'Read a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required; summary is only a bounded preview and must never be presented as the full report.',
+        description: 'Read a canonical CN research artifact section by artifact_id. For a complete report, section=report is required; follow next_offset until truncated=false. Preserve page whitespace and concatenate pages in order. The summary must never be presented as the full report. In v2 artifacts, distinguish current-market observations from dated cumulative feedback and expired research windows. Use market_diagnostics.interpretation_contract in section=packet when interpreting evidence. Quote coverage, source IDs and time semantics; do not infer a sentiment transition from one cross-section or business confirmation from a price move. The deterministic engine has not executed independent semantic analysis. In v3 reports, show the observation_plan cards before the evidence appendix: named comparison members, checkpoints, support/counter conditions and research follow-up actions. These are pending manual observations, not scheduled monitoring or completed outcomes; preserve catalyst and evidence gates.',
         parameters: {
             artifact_id: {
                 type: 'string',
@@ -622,6 +636,10 @@ function registerArtifactTool(ctx) {
             max_chars: {
                 type: 'integer',
                 description: `Maximum content length to request from the CLI, ${MIN_MAX_CHARS}-${MAX_MAX_CHARS}.`
+            },
+            offset: {
+                type: 'integer',
+                description: 'Zero-based Unicode character offset. Pass next_offset from the preceding page.'
             }
         },
         output: {
