@@ -51,6 +51,9 @@ ARTIFACT_RESULT_FIELDS = {
     "content_type",
     "content",
     "truncated",
+    "offset",
+    "next_offset",
+    "total_chars",
     "relative_path",
 }
 IMMUTABLE_FILENAMES = {

@@ -92,6 +92,8 @@ class EngineTests(unittest.TestCase):
                 "schema_version",
                 "market",
                 "writer_mode",
+                "engine_version",
+                "research_diagnostics",
                 "method_id",
                 "run_id",
                 "artifact_id",

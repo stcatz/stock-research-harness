@@ -12,8 +12,15 @@ from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any
 
-from .contracts import MARKET, SCHEMA_VERSION, ArtifactReadRequest, RunRequest, parse_datetime
-from .engine import build_research_packet
+from .contracts import (
+    MARKET,
+    SCHEMA_VERSION,
+    ArtifactReadRequest,
+    ContractError,
+    RunRequest,
+    parse_datetime,
+)
+from .engine import ENGINE_VERSION, build_research_packet
 from .locking import run_lock
 from .reporting import render_report
 from .snapshot import load_snapshot, validate_snapshot
@@ -106,10 +113,12 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
         }[request.section]
         content = _decode_utf8(verified.file_bytes[filename], filename)
         relative_path = verified.manifest["paths"][request.section]
-    truncated = len(content) > request.max_chars
-    if truncated:
-        marker = "\n…[truncated]"
-        content = content[: request.max_chars - len(marker)] + marker
+    total_chars = len(content)
+    if request.offset > total_chars:
+        raise ContractError("offset exceeds artifact length")
+    content = content[request.offset : request.offset + request.max_chars]
+    next_offset = request.offset + len(content)
+    truncated = next_offset < total_chars
     return {
         "schema_version": SCHEMA_VERSION,
         "market": MARKET,
@@ -119,6 +128,9 @@ def read_artifact(raw_request: Mapping[str, Any], workspace: Path) -> dict[str, 
         "content": content,
         "truncated": truncated,
         "relative_path": relative_path,
+        "offset": request.offset,
+        "next_offset": next_offset if truncated else None,
+        "total_chars": total_chars,
     }
 
 
@@ -311,7 +323,16 @@ def _verify_complete_run(
         raise RuntimeError("immutable snapshot hash mismatch")
     stored_request = RunRequest.from_dict(request_payload)
     generated_at = parse_datetime(packet.get("generated_at"), "packet.generated_at")
-    rebuilt_packet = build_research_packet(
+    if packet.get("engine_version") == ENGINE_VERSION:
+        verify_builder, verify_renderer = build_research_packet, render_report
+    elif "engine_version" not in packet:
+        from .legacy_v01.engine import build_research_packet as legacy_builder
+        from .legacy_v01.reporting import render_report as legacy_renderer
+
+        verify_builder, verify_renderer = legacy_builder, legacy_renderer
+    else:
+        raise RuntimeError("unsupported historical engine version")
+    rebuilt_packet = verify_builder(
         validated_snapshot,
         stored_request,
         generated_at=generated_at,
@@ -329,7 +350,7 @@ def _verify_complete_run(
         )
     ):
         raise RuntimeError("immutable packet and manifest identity mismatch")
-    if render_report(packet) != report:
+    if verify_renderer(packet) != report:
         raise RuntimeError("immutable report semantic mismatch")
     if _build_summary(packet, manifest["manifest_hash"]) != summary:
         raise RuntimeError("immutable summary semantic mismatch")

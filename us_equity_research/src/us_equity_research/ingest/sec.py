@@ -140,6 +140,19 @@ class SecClient:
         self._last_request_started = now
 
 
+class SecSessionClient(SecClient):
+    """Reuse successful responses inside one run only; never persist provider payloads."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._responses = {}
+
+    def _get_json(self, path):
+        if path not in self._responses:
+            self._responses[path] = super()._get_json(path)
+        return self._responses[path]
+
+
 def collect_sec_snapshot(
     *,
     workspace: Path,
@@ -302,7 +315,24 @@ def _build_snapshot(
                     }
                 ]
 
+    calendar_extra = {}
+    if market is not None and market.get("calendar_bundle") is not None:
+        bundle = require_mapping(market["calendar_bundle"], "calendar_bundle")
+        reject_unknown_fields(bundle, {"session_calendar", "evidence"}, "calendar_bundle")
+        cal = require_mapping(bundle.get("session_calendar"), "session_calendar")
+        evidence = dict(require_mapping(bundle.get("evidence"), "calendar evidence"))
+        ref = evidence.get("evidence_id")
+        if ref != cal.get("source_evidence_ref") or evidence.get("source_level") != "official":
+            raise ContractError("Calendar requires its own official evidence")
+        if ref in evidence_by_id:
+            raise ContractError("Duplicate calendar evidence ID")
+        if parse_datetime(evidence.get("available_at"), "calendar.available_at") > retrieved:
+            raise ContractError("Calendar evidence is not available at collection time")
+        evidence_by_id[ref] = evidence
+        calendar_extra["session_calendar"] = cal
+
     return {
+        **calendar_extra,
         "schema_version": SCHEMA_VERSION,
         "market": MARKET,
         "snapshot_id": snapshot_id,
@@ -878,6 +908,7 @@ def _validate_market_payload(
             "market",
             "provider",
             "license_attestation",
+            "calendar_bundle",
             "evidence",
             "financial_facts",
             "market_context",

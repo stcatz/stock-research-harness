@@ -236,3 +236,19 @@ This package implements original repo-specific code and contracts. It borrows pu
 The repository code is MIT-licensed under the root `LICENSE`. External projects, papers, and guidance remain under their original licenses or terms. No claim is made that their code, prompts, datasets, or proprietary materials were copied into this package. If future work imports upstream code or text, preserve the original attribution and license notice alongside that material.
 
 本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。
+
+## 2026-09-12 美股工程升级
+
+当前引擎 `us-research-plan-v1.0` 新增能力诊断、条件式研究计划卡、常规收盘时效门槛和显式交易日历契约；修复未来来源穿透计算和部分叙述的问题。运行标识区分算法版本，旧产物按冻结旧实现核验。
+
+完整报告可用 `artifact-read --complete --request-json REQUEST.json` 获取；DSH 按 `next_offset` 连续读取。详见 [研究升级契约](docs/RESEARCH_UPGRADE.md)。没有接入新的行情供应商、预期库或自主语义模型；缺少对应输入时仍显示 UNKNOWN。
+
+## 富途只读行情待验通道（2026-09-13）
+
+新增 `collect-futu-quotes` 和 `futu-observation-report`，先规范化采集、再按人工核对日历生成行情观察附页。历史发布时间不足时保留 UNKNOWN，不自动进入正式候选证据。SEC 行情输入支持独立 `calendar_bundle`。详见 [接入说明](docs/FUTU_QUOTE_CONNECTION.md)。
+
+## 可复算的本地美股日报
+
+已新增 MCP 行情采集、行业 ETF 比较、SEC 刷新和明确降级的每日研究报告。功能缺口、验证证据与运行入口见 [日报能力审计](docs/DAILY_REVIEW.md)。行情接入不自动提升正式候选；缺时间、财务或预期数据继续保留 UNKNOWN。
+
+日历自动刷新、TTM多来源计算、研究账本及剩余外部数据验收要求见 [缺口优化结果](docs/GAP_OPTIMIZATION.md)。

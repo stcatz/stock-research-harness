@@ -1,0 +1,7 @@
+{
+  "symbols": ["US.MSFT", "US.SPY", "US.QQQ"],
+  "benchmark": "US.SPY",
+  "start": "2026-03-01",
+  "end": "2026-09-12",
+  "license_attestation": "UNKNOWN_CONFIRM_APPLICABLE_DATA_USAGE_TERMS"
+}

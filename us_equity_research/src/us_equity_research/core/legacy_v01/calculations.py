@@ -5,8 +5,8 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from .contracts import FINANCIAL_METRICS, require_string
-from .snapshot import ValidatedSnapshot
+from ..contracts import FINANCIAL_METRICS, require_string
+from ..snapshot import ValidatedSnapshot
 
 CALCULATION_METRICS = (
     "revenue_growth",
@@ -38,10 +38,7 @@ def build_calculation_bundle(
     for fact_id in fact_refs:
         fact = dict(snapshot.financial_facts_by_id[fact_id])
         available_at = datetime.fromisoformat(fact["available_at"])
-        source_available = datetime.fromisoformat(
-            snapshot.evidence_by_id[fact["evidence_ref"]]["available_at"]
-        )
-        if available_at <= decision_at and source_available <= decision_at:
+        if available_at <= decision_at:
             eligible_fact_records.append(fact)
             facts_by_metric.setdefault(fact["metric"], []).append(fact)
         else:

@@ -529,3 +529,22 @@ test('partial and UNKNOWN with gaps are successful domain results', () => {
   assert.equal(result.status, 'partial')
   assert.deepEqual(result.gaps, ['UNKNOWN'])
 })
+
+test('Unicode artifact pages retain original cursors and exact whitespace', () => {
+  const content = '  \n' + '研😀'.repeat(250) + '\n'
+  const total = Array.from(content).length
+  const page = sanitizeArtifactReadResult({schema_version:'0.1',market:'US',artifact_id:'us-artifact-page',
+    section:'report',content_type:'text/markdown',content,truncated:false,offset:0,next_offset:null,total_chars:total},700)
+  assert.equal(page.content,content)
+  assert.equal(page.total_chars,total)
+  assert.equal(page.next_offset,null)
+  assert.throws(() => sanitizeArtifactReadResult({...page,next_offset:2,truncated:true},700),/pagination/)
+})
+
+test('redaction preserves source page cursor even when visible length changes', () => {
+  const content = 'api_key=top-secret-key'
+  const page = sanitizeArtifactReadResult({schema_version:'0.1',market:'US',artifact_id:'us-artifact-page',
+    section:'report',content_type:'text/markdown',content,truncated:true,offset:0,next_offset:content.length,total_chars:1000},700)
+  assert.doesNotMatch(page.content,/top-secret-key/)
+  assert.equal(page.next_offset,content.length)
+})

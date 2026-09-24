@@ -238,6 +238,9 @@ class ArtifactReadRequestTests(unittest.TestCase):
                 "content",
                 "truncated",
                 "relative_path",
+                "offset",
+                "next_offset",
+                "total_chars",
             ],
         )
         self.assertEqual(
@@ -251,6 +254,10 @@ class ArtifactReadRequestTests(unittest.TestCase):
                 "content",
                 "truncated",
                 "relative_path",
+                "offset",
+                "next_offset",
+                "total_chars",
+                "full_report_verified",
             },
         )
         self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")

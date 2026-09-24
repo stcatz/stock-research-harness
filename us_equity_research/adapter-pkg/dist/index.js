@@ -259,14 +259,18 @@ function normalizeArtifactReadArgs(args) {
     rejectUnknownFields(raw, [
         'artifact_id',
         'section',
-        'max_chars'
+        'max_chars',
+        'offset'
     ], 'us_artifact_read arguments');
     const artifactId = validateIdentifier(raw.artifact_id, 'artifact_id');
     const sectionRaw = raw.section == null ? 'summary' : requireInputString(raw.section, 'section');
     if (!ARTIFACT_SECTIONS.has(sectionRaw)) {
         throw new Error('section must be summary, report, manifest, or packet');
     }
+    const offset = raw.offset === undefined ? 0 : getInteger(raw.offset, 'offset');
+    if (offset === undefined || offset < 0) throw new Error('offset must be a nonnegative integer');
     return {
+        offset,
         artifact_id: artifactId,
         section: sectionRaw,
         max_chars: normalizeMaxChars(raw.max_chars)
@@ -615,9 +619,16 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
     if (typeof payload.content !== 'string') {
         throw new Error('content must be a string');
     }
+    const paged = payload.offset !== undefined;
+    const offset = paged ? getInteger(payload.offset, 'offset') : undefined;
+    const total = paged ? getInteger(payload.total_chars, 'total_chars') : undefined;
+    const next = payload.next_offset === null ? null : getInteger(payload.next_offset, 'next_offset');
+    if (paged && (offset === undefined || total === undefined || offset < 0 || total < offset || Array.from(payload.content).length > normalizedMaxChars || next !== null && (next === undefined || next <= offset || next > total) || offset + Array.from(payload.content).length !== (next ?? total) || Boolean(payload.truncated) !== (next !== null))) {
+        throw new Error('invalid artifact pagination metadata');
+    }
     const sanitizedContent = redactSensitiveText(payload.content);
     const marker = '\n…[truncated]';
-    const wasCapped = sanitizedContent.length > normalizedMaxChars;
+    const wasCapped = !paged && sanitizedContent.length > normalizedMaxChars;
     const content = wasCapped ? `${sanitizedContent.slice(0, Math.max(0, normalizedMaxChars - marker.length))}${marker}` : sanitizedContent;
     const result = {
         schema_version: SCHEMA_VERSION,
@@ -628,6 +639,11 @@ export function sanitizeArtifactReadResult(raw, maxChars = DEFAULT_MAX_CHARS) {
         content,
         truncated: Boolean(getBoolean(payload.truncated, 'truncated') || wasCapped)
     };
+    if (paged) Object.assign(result, {
+        offset,
+        next_offset: next,
+        total_chars: total
+    });
     const relativePath = sanitizeRelativePath(payload.relative_path);
     if (relativePath !== undefined) {
         result.relative_path = relativePath;
@@ -678,7 +694,7 @@ function renderArtifactRead(value) {
     if ('error' in value) {
         return boundRendered(`market: ${value.market}\nerror: ${value.error}\nmessage: ${value.message}`);
     }
-    return boundRendered([
+    return [
         `market: ${value.market}`,
         `artifact_id: ${value.artifact_id}`,
         `section: ${value.section}`,
@@ -686,8 +702,8 @@ function renderArtifactRead(value) {
         `truncated: ${String(value.truncated)}`,
         value.relative_path ? `relative_path: ${value.relative_path}` : '',
         '',
-        value.content
-    ].filter(Boolean).join('\n').trim());
+        `offset: ${value.offset ?? 0}; next_offset: ${value.next_offset ?? 'end'}; total_chars: ${value.total_chars ?? 'UNKNOWN'}`
+    ].filter(Boolean).join('\n') + '\n\n' + value.content;
 }
 export async function runResearchWorkflow(args, options = {}) {
     const normalized = normalizeRunArgs(args);
@@ -714,7 +730,8 @@ export async function readArtifact(args, options = {}) {
     const request = {
         artifact_id: normalized.artifact_id,
         section: normalized.section,
-        max_chars: normalized.max_chars
+        max_chars: normalized.max_chars,
+        offset: normalized.offset
     };
     const raw = await callResearchCli('artifact-read', request, options);
     return sanitizeArtifactReadResult(raw, normalized.max_chars);
@@ -808,6 +825,10 @@ const artifactTool = defineTool({
                 'packet'
             ],
             description: 'Predefined artifact section to read. Use report for the full Markdown research report; summary is only a compact machine-readable preview.'
+        },
+        offset: {
+            type: 'integer',
+            description: 'Unicode character cursor; follow next_offset until null to read all pages.'
         },
         max_chars: {
             type: 'integer',
