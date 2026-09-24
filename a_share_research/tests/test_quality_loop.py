@@ -8,14 +8,14 @@ import unittest
 from importlib.resources import files
 from pathlib import Path
 
-from a_share_research.core.drift import audit_snapshot_drift
 from a_share_research.core.contracts import ContractError, parse_datetime
+from a_share_research.core.drift import audit_snapshot_drift
+from a_share_research.core.opportunity import assess_opportunity
 from a_share_research.core.outcomes import (
     record_outcome,
     summarize_outcome_history,
     summarize_outcomes,
 )
-from a_share_research.core.opportunity import assess_opportunity
 from a_share_research.core.pipeline import read_artifact, run_research
 from a_share_research.core.research_history import summarize_research_history
 

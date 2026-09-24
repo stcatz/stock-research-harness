@@ -32,7 +32,11 @@ from .hithink_client import (
     HITHINK_PROVIDER_VERSION,
     HiThinkClient,
 )
-from .hithink_enrichment import EnrichmentResult, collect_hithink_enrichment
+from .hithink_enrichment import (
+    HITHINK_FULL_MARKET_LIMIT,
+    EnrichmentResult,
+    collect_hithink_enrichment,
+)
 from .hithink_provider import HiThinkProvider
 from .market_data import (
     SHANGHAI_TZ,
@@ -154,6 +158,7 @@ def collect_cn_snapshot(
             candidate_thscodes=tuple(
                 _hithink_symbol_for_cn_symbol(symbol) for symbol in candidate_symbols
             ),
+            full_market_limit=HITHINK_FULL_MARKET_LIMIT,
         )
         if enrichment.latest_session != collection.latest_session:
             raise CollectionError("HiThink enrichment latest_session differs from daily data")
@@ -416,6 +421,9 @@ def _assemble_snapshot(
         "themes": themes,
     }
     if enrichment is not None:
+        snapshot["market_discoveries"] = [
+            item.to_dict() for item in enrichment.theme_discoveries
+        ]
         snapshot["provider_data_gaps"] = {
             code: list(gaps) for code, gaps in enrichment.data_gaps.items()
         }

@@ -38,7 +38,10 @@ def build_calculation_bundle(
     for fact_id in fact_refs:
         fact = dict(snapshot.financial_facts_by_id[fact_id])
         available_at = datetime.fromisoformat(fact["available_at"])
-        if available_at <= decision_at:
+        source_available = datetime.fromisoformat(
+            snapshot.evidence_by_id[fact["evidence_ref"]]["available_at"]
+        )
+        if available_at <= decision_at and source_available <= decision_at:
             eligible_fact_records.append(fact)
             facts_by_metric.setdefault(fact["metric"], []).append(fact)
         else:

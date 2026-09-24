@@ -44,6 +44,8 @@ def render_report(packet: dict[str, Any]) -> str:
     if packet["data_mode"] == "fixture":
         lines.extend([FIXTURE_BANNER, ""])
 
+    lines.extend(_research_plan(packet.get("research_diagnostics")))
+
     lines.extend(
         [
             "## 数据与 PIT 状态",
@@ -224,6 +226,8 @@ def _candidate_section(index: int, candidate: Mapping[str, Any]) -> list[str]:
                 f"- `{_cell(evidence['evidence_id'])}` {_text(evidence['title'])} — "
                 f"<{evidence['source_url']}>；source_level=`{_cell(evidence['source_level'])}`；"
                 f"published_at={_cell(evidence['published_at'])}；"
+                f"effective_at={_cell(evidence['effective_at'])}；"
+                f"retrieved_at={_cell(evidence['retrieved_at'])}；"
                 f"available_at={_cell(evidence['available_at'])}；"
                 f"as_of={_cell(evidence['as_of'])}。{_text(evidence['summary'])}"
             )
@@ -350,3 +354,75 @@ def _assert_report_policy(report: str) -> None:
     found = [phrase for phrase in PROHIBITED_REPORT_PHRASES if phrase.casefold() in normalized]
     if found:
         raise ValueError("report contains prohibited trading language: " + ", ".join(found))
+
+
+def _research_plan(diagnostics):
+    if not diagnostics:
+        return []
+    d = diagnostics
+    lines = [
+        "## 研究能力与后续计划",
+        "",
+        f"- 快照适用时间：{_cell(d['snapshot_as_of'])}；采集时间：{_cell(d['snapshot_retrieved_at'])}",
+        f"- 截止时点内最新输入可用时间：{_cell(d['latest_input_available_at'])}；最新检索时间：{_cell(d['latest_input_retrieved_at'])}",
+        "- 以下为人工研究检查清单，未设置监控；未调用语义模型。主题阶段和催化日期来自种子，须独立复核。",
+        "",
+        "| 能力 | 覆盖 | 状态 | 限制 |",
+        "|---|---:|---|---|",
+    ]
+    for name, cap in d["capabilities"].items():
+        lines.append(
+            f"| {_cell(name)} | {cap['observed']}/{cap['total']} | {_cell(cap['status'])} | {_cell(cap['missing_reason'])} |"
+        )
+    lines.extend(
+        [
+            "",
+            f"- 下一常规交易日：{d['next_core_session'] or 'UNKNOWN：缺少覆盖研究时点的正式交易日历'}",
+        ]
+    )
+    for check in d["checkpoints"]:
+        lines.append(f"- {check['label']}：纽约 {check['new_york']} / 上海 {check['shanghai']}")
+    for card in d["plan_cards"]:
+        purpose = (
+            "补证任务，不是观察推荐" if card["purpose"] == "EVIDENCE_REPAIR" else "条件式研究复核"
+        )
+        lines.extend(
+            [
+                "",
+                f"### {card['card_id']} · {card['symbol']} · {purpose}",
+                "",
+                f"- 当前状态：`{card['formal_decision']}`；行情资格：`{card['price_status']}`。",
+                f"- 核心问题：{_text(card['question'])}",
+                f"- 计算基线：{_text(card['baseline'])}",
+                f"- 同主题研究成员：{_join(card['peer_members'])}；尚未验证为可比同行。",
+                f"- 催化日期：纽约 {card['catalyst_new_york']} / 上海 {card['catalyst_shanghai']}；{card['catalyst_label']}。",
+            ]
+        )
+        for key, label in [
+            ("before_event", "第一步：原始披露"),
+            ("record_before", "第二步：冻结原预期"),
+            ("measure_after", "第三步：披露后逐项对照"),
+            ("market_check", "第四步：市场反馈"),
+            ("support_condition", "支持条件"),
+            ("counter_condition", "反对条件"),
+            ("on_support", "获得支持后"),
+            ("on_counter", "出现反证后"),
+            ("on_unknown", "证据不足时"),
+        ]:
+            lines.append(f"- **{label}**：{_text(card[key])}")
+        lines.extend(
+            [
+                f"- 原证伪条件：{_join(card['invalidation_conditions'])}",
+                f"- 风险：{_join(card['risk_flags'])}；数据缺口：{_join(card['data_gaps'])}",
+                "- 核验结果：待人工记录，尚未发生。",
+            ]
+        )
+        for source in card["sources"]:
+            times = "；".join(
+                f"{key}={source[key]}"
+                for key in ("published_at", "effective_at", "available_at", "retrieved_at", "as_of")
+            )
+            lines.append(
+                f"- 来源 `{source['evidence_id']}`（{source['source_level']}）：<{source['source_url']}>；{times}"
+            )
+    return lines + [""]

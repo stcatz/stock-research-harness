@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..ingest.market_data import normalize_cn_symbol
 from .contracts import (
     MARKET,
     SCHEMA_VERSION,
@@ -20,10 +21,9 @@ from .contracts import (
     validate_url,
 )
 from .locking import run_lock
+from .snapshot import validate_snapshot
 from .storage import connect, database_path, initialize_workspace
 from .utils import read_json, sha256_file, sha256_value
-from .snapshot import validate_snapshot
-from ..ingest.market_data import normalize_cn_symbol
 
 ALLOWED_HORIZONS = {5, 20}
 BENCHMARK_SYMBOL = "000906.SH"

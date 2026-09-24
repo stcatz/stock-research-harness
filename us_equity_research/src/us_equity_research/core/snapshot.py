@@ -99,6 +99,7 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
             "financial_facts",
             "market_context",
             "themes",
+            "session_calendar",
         },
         "snapshot",
     )
@@ -132,6 +133,8 @@ def validate_snapshot(raw: Mapping[str, Any]) -> ValidatedSnapshot:
 
     evidence_items = require_list(data.get("evidence"), "snapshot.evidence")
     evidence_by_id = _validate_evidence(evidence_items, snapshot_retrieved)
+    from .research_diagnostics import validate_session_calendar
+    validate_session_calendar(data, evidence_by_id)
     financial_fact_items = require_list(data.get("financial_facts"), "snapshot.financial_facts")
     financial_facts_by_id = _validate_financial_facts(
         financial_fact_items,

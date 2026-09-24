@@ -86,3 +86,7 @@ Before changing a profile, back up its package manifest and lockfile. Remove the
 dsh plugin --profile web remove @user/dsh-us-equity-research
 dsh plugin --profile headless remove @user/dsh-us-equity-research
 ```
+
+### 完整页面读取（2026-09-12）
+
+`us_artifact_read` 支持 `offset`（默认 0，Unicode 字符位置），返回 `offset`、`next_offset`、`total_chars`。连续传入 next_offset，直到其为 null。不要仅展示第一页作为完整报告，也不要按脱敏后的文本长度推进游标。当前报告含美股能力诊断和条件式研究计划卡，canonical 写入仍由 Python 引擎负责。

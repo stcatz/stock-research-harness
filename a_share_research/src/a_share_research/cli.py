@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,13 +11,20 @@ from typing import Any
 
 from .core.contracts import SCHEMA_VERSION, ContractError
 from .core.drift import audit_snapshot_drift
+from .core.feedback import (
+    list_feedback,
+    read_feedback,
+    register_hypothesis,
+    review_feedback,
+)
+from .core.handoff import close_review, journal_list, journal_read, premarket
 from .core.outcomes import (
     record_outcome,
     settle_outcomes_from_snapshot,
     summarize_outcome_history,
     summarize_outcomes,
 )
-from .core.pipeline import doctor, read_artifact, run_research
+from .core.pipeline import doctor, read_artifact, read_complete_artifact, run_research
 from .core.research_history import summarize_research_history
 from .core.storage import initialize_workspace
 from .ingest import collect_cn_snapshot, probe_hithink_provider
@@ -36,6 +44,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("init", help="Create the SQLite database and runtime directories")
     subparsers.add_parser("doctor", help="Check the local runtime without accessing the network")
 
+    for name, description in (
+        ("premarket", "Freeze a local shadow forecast from an explicit snapshot; never publish"),
+        ("close-review", "Append shadow close results to the exact frozen forecast ID"),
+        ("journal-read", "Read a bounded, integrity-checked CN handoff record"),
+        ("journal-list", "List CN handoff IDs for an explicit business date"),
+        ("feedback-review", "Append T+1/T+5/T+20 observations to a frozen research artifact"),
+        ("hypothesis-register", "Register or append a revision to a research hypothesis"),
+        ("feedback-read", "Read an integrity-checked research feedback page"),
+        ("feedback-list", "List research feedback records for a frozen artifact"),
+    ):
+        command = subparsers.add_parser(name, help=description)
+        command.add_argument("--request-json", required=True)
+
     run_parser = subparsers.add_parser("run", help="Run a versioned JSON research request")
     run_parser.add_argument(
         "--request-json",
@@ -44,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     read_parser = subparsers.add_parser("artifact-read", help="Read a bounded artifact section")
+    read_parser.add_argument(
+        "--complete",
+        action="store_true",
+        help="Local CLI only: export every verified page of the section",
+    )
     read_parser.add_argument(
         "--request-json",
         required=True,
@@ -135,7 +161,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "run":
             result = run_research(_read_json(args.request_json), workspace)
         elif args.command == "artifact-read":
-            result = read_artifact(_read_json(args.request_json), workspace)
+            reader = read_complete_artifact if args.complete else read_artifact
+            result = reader(_read_json(args.request_json), workspace)
+        elif args.command in {
+            "premarket",
+            "close-review",
+            "journal-read",
+            "journal-list",
+            "feedback-review",
+            "hypothesis-register",
+            "feedback-read",
+            "feedback-list",
+        }:
+            handlers = {
+                "premarket": premarket,
+                "close-review": close_review,
+                "journal-read": journal_read,
+                "journal-list": journal_list,
+                "feedback-review": review_feedback,
+                "hypothesis-register": register_hypothesis,
+                "feedback-read": read_feedback,
+                "feedback-list": list_feedback,
+            }
+            result = handlers[args.command](_read_json(args.request_json), workspace)
         elif args.command == "outcome-record":
             result = record_outcome(_read_json(args.request_json), workspace)
         elif args.command == "outcome-summary":
@@ -181,6 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         TypeError,
         ValueError,
         OSError,
+        sqlite3.Error,
         json.JSONDecodeError,
     ) as exc:
         print(
@@ -219,7 +268,7 @@ def _read_json(value: str) -> dict[str, Any]:
 
 
 def _safe_error_message(exc: BaseException) -> str:
-    if isinstance(exc, OSError):
+    if isinstance(exc, (OSError, sqlite3.Error)):
         return "filesystem operation failed"
     return str(exc)
 

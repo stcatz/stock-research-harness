@@ -10,7 +10,6 @@ from a_share_research.core.harness_review import (
     render_opportunity_memo,
 )
 
-
 ARTIFACT_ID = "cn-artifact-review-test"
 SNAPSHOT_ID = "cn-snapshot-review-test"
 DECISION_AT = "2026-08-26T20:30:00+08:00"

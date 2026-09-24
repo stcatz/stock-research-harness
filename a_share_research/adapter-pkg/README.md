@@ -28,12 +28,15 @@
     - 用户要求完整报告时必须分页读取 `report`；`summary` 只是紧凑预览，不能当作完整报告返回。
   - `max_chars?`
   - `cursor?`: 从 0 开始；持续读取返回的 `next_cursor`，并验证 `content_sha256` 和 `total_chars`。
+    原样拼接各页，不得去除页面空白。本机 CLI 可用 `artifact-read --complete` 一次导出全部页面。
 - `cn_outcome_history`
   - `evaluation_at`: 带时区 ISO-8601 时间
   - `limit?`: 1–20；只返回当时已可用的旧结果，不写入 outcome。
 - `cn_research_history`
   - `evaluation_at`: 带时区 ISO-8601 时间
   - `limit?`: 1–500；返回连续中间态、无进展天数和注意力老化动作，不改写 canonical 结果。
+
+运行摘要中的 `data_readiness` 表示行情日期状态；`completed` 只代表程序完成。新的预期登记和多期限复盘通过本机 CLI 进入，见 [研究反馈 v1](../docs/RESEARCH_FEEDBACK.md)。
 
 本包包含：
 

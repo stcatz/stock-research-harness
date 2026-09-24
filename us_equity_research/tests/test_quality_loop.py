@@ -8,8 +8,8 @@ import unittest
 from importlib.resources import files
 from pathlib import Path
 
-from us_equity_research.core.drift import audit_snapshot_drift
 from us_equity_research.core.contracts import ContractError
+from us_equity_research.core.drift import audit_snapshot_drift
 from us_equity_research.core.outcomes import (
     record_outcome,
     summarize_outcome_history,

@@ -259,6 +259,7 @@ class ArtifactReadRequestTests(unittest.TestCase):
                 "total_chars",
                 "content_sha256",
                 "relative_path",
+                "full_report_verified",
             },
         )
         self.assertEqual(schema["properties"]["schema_version"]["const"], "0.1")

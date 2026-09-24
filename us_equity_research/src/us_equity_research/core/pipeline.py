@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import MARKET, SCHEMA_VERSION, ArtifactReadRequest, RunRequest, parse_datetime
-from .engine import build_research_packet
+from .engine import ENGINE_VERSION, build_research_packet
 from .locking import run_lock
 from .reporting import render_report
 from .snapshot import load_snapshot, validate_snapshot
@@ -331,7 +331,19 @@ def _verify_complete_run(
         raise RuntimeError("immutable snapshot hash mismatch")
     stored_request = RunRequest.from_dict(request_payload)
     generated_at = parse_datetime(packet.get("generated_at"), "packet.generated_at")
-    rebuilt_packet = build_research_packet(
+    # A run records the engine version that produced it. A packet without one predates the
+    # version field, so verify it with that generation's frozen implementation rather than
+    # declaring the artifact unreadable; an unknown later version is still rejected.
+    if packet.get("engine_version") == ENGINE_VERSION:
+        verify_builder, verify_renderer = build_research_packet, render_report
+    elif "engine_version" not in packet:
+        from .legacy_v01.engine import build_research_packet as legacy_builder
+        from .legacy_v01.reporting import render_report as legacy_renderer
+
+        verify_builder, verify_renderer = legacy_builder, legacy_renderer
+    else:
+        raise RuntimeError("unsupported historical engine version")
+    rebuilt_packet = verify_builder(
         validated_snapshot,
         stored_request,
         generated_at=generated_at,
@@ -351,7 +363,7 @@ def _verify_complete_run(
         )
     ):
         raise RuntimeError("immutable packet and manifest identity mismatch")
-    if render_report(packet) != report:
+    if verify_renderer(packet) != report:
         raise RuntimeError("immutable report semantic mismatch")
     if _build_summary(packet, manifest["manifest_hash"]) != summary:
         raise RuntimeError("immutable summary semantic mismatch")
@@ -416,15 +428,18 @@ def _build_summary(packet: dict[str, Any], manifest_hash: str) -> dict[str, Any]
                 "name": item["name"],
                 "theme": item["theme_name"],
                 "decision": item["decision"],
-                "research_priority": item["research_priority"],
-                "evidence_state": item["evidence_state"],
-                "reason": item["reasons"][0] if item["reasons"] else "UNKNOWN",
+                # The quality loop decorates fresh packets. A packet produced by a frozen
+                # legacy engine carries none of it, so report UNKNOWN rather than failing
+                # the read of an artifact we can still verify byte for byte.
+                "research_priority": item.get("research_priority"),
+                "evidence_state": item.get("evidence_state", "UNKNOWN"),
+                "reason": item["reasons"][0] if item.get("reasons") else "UNKNOWN",
             }
             for item in packet["focus"]
         ],
         "warnings": packet["warnings"],
         "gaps": packet["data_gaps"],
-        "research_queue_count": len(packet["research_queue"]),
+        "research_queue_count": len(packet.get("research_queue") or []),
         "available_sections": ["summary", "report", "manifest", "packet", "facts"],
         "manifest_hash": manifest_hash,
     }
@@ -454,10 +469,15 @@ def _build_fact_packet(packet: dict[str, Any]) -> dict[str, Any]:
         "market_context": packet["market_context"],
         "candidates": [
             {
+                # Rebuild the fact view from whatever the frozen engine actually wrote. A
+                # packet produced by a legacy engine legitimately lacks the newer candidate
+                # fields, and a verified read of that run must still work; an absent field is
+                # reported as None rather than invented. `_verify_complete_run` recomputes
+                # this mapping and compares, so the result stays deterministic.
                 "candidate_id": item["candidate_id"],
                 "theme_id": item["theme_id"],
                 "theme_name": item["theme_name"],
-                "stage": item["stage"],
+                "stage": item.get("stage"),
                 "security_id": item["security_id"],
                 "symbol": item["symbol"],
                 "name": item["name"],
@@ -467,7 +487,7 @@ def _build_fact_packet(packet: dict[str, Any]) -> dict[str, Any]:
                 "evidence": item["evidence"],
                 "facts": item["facts"],
                 "calculations": item["calculations"],
-                "valuation_profile": item["valuation_profile"],
+                "valuation_profile": item.get("valuation_profile"),
             }
             for item in packet["all_decisions"]
         ],

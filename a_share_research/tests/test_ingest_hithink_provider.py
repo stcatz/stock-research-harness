@@ -169,6 +169,19 @@ class HiThinkProviderTests(unittest.TestCase):
                 is_benchmark=False,
             )
 
+    def test_historical_session_does_not_import_undated_current_snapshot(self) -> None:
+        self.client.retrieved_times["historical"] = datetime(2026, 8, 18, 8, 0, tzinfo=SHANGHAI)
+        self.client.snapshot_overrides["600000.SH"] = {"last_price": 999}
+        series = self.provider.fetch_daily_series(
+            "sh.600000",
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 17),
+            is_benchmark=False,
+        )
+        self.assertIsNone(series.bars[-1].preclose)
+        self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "NOT_COMPARABLE")
+        self.assertEqual(len(self.client.calls), 1)
+
     def test_snapshot_price_precision_truncation_is_tolerated(self) -> None:
         # The index history endpoint quantizes to three decimals while the snapshot may
         # carry a fourth, and the snapshot may truncate turnover to whole yuan. These
@@ -192,7 +205,7 @@ class HiThinkProviderTests(unittest.TestCase):
         self.assertEqual(series.metadata["snapshot_cross_check"]["status"], "MATCHED")
         # History remains authoritative for OHLC; the snapshot only validates it and
         # supplies preclose/pct_chg, so the four-decimal snapshot close is not adopted.
-        self.assertEqual(series.bars[-1].close, Decimal("111"))
+        self.assertEqual(series.bars[-1].close, Decimal(111))
         self.assertEqual(series.bars[-1].preclose, Decimal(110))
 
     def test_snapshot_amount_mismatch_beyond_tolerance_fails_closed(self) -> None:

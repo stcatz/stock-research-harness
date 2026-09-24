@@ -19,6 +19,19 @@ function jsonRoundTrip(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+test('artifact pages preserve whitespace, Unicode characters and continuation cursor', () => {
+  const content = '\n  中文🙂\n\n'
+  const page = sanitizeArtifactReadResult({
+    schema_version: '0.1', market: 'CN', artifact_id: 'cn-artifact-test',
+    section: 'report', content, truncated: true, cursor: 500,
+    next_cursor: 500 + Array.from(content).length, total_chars: 1000,
+  }, 500)
+  assert.equal(page.content, content)
+  assert.equal(page.cursor, 500)
+  assert.equal(page.next_cursor, 508)
+  assert.equal(page.total_chars, 1000)
+})
+
 async function makeTempProject() {
   const baseRoot = await mkdtemp(join(tmpdir(), 'a-share-research-'))
   const workspace = join(baseRoot, 'workspace')

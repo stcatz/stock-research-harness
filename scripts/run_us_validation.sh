@@ -243,7 +243,7 @@ esac
 printf 'run_us_validation: reading the first verified report page (follow next_cursor for more)\n' >&2
 printf '%s\n' \
   "{\"artifact_id\":\"$ARTIFACT_ID\",\"section\":\"report\",\"max_chars\":20000}" \
-  | "$PYTHON" -m us_equity_research.cli --workspace "$ROOT" artifact-read --request-json - \
+  | "$PYTHON" -m us_equity_research.cli --workspace "$ROOT" artifact-read --complete --request-json - \
       >"$TMP_DIR/report.json"
 
 cat "$TMP_DIR/report.json"

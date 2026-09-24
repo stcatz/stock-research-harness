@@ -16,9 +16,15 @@ from .contracts import (
     parse_datetime,
 )
 from .quality import build_research_queue, decorate_quality
+from .research_diagnostics import build_diagnostics, price_readiness
 from .snapshot import ValidatedSnapshot
 
 METHOD_ID = "us-equity-research-v0.2"
+# Method identity (us-equity-research-v0.2) versions the research methodology; this constant
+# versions the engine implementation that produced a run. Both feed the run seed, so a
+# change in either yields a different run_id / artifact_id instead of silently reusing
+# an artifact built by different code.
+ENGINE_VERSION = "us-research-plan-v1.0"
 
 DECISION_LABELS = {
     "observe": "Observe",
@@ -48,6 +54,7 @@ def build_research_packet(
         "request": request.to_dict(),
         "snapshot_hash": snapshot.snapshot_hash,
         "method_id": METHOD_ID,
+        "engine_version": ENGINE_VERSION,
     }
     seed_hash = _sha256_value(request_seed)
 
@@ -56,6 +63,7 @@ def build_research_packet(
         "market": MARKET,
         "writer_mode": "engine",
         "method_id": METHOD_ID,
+        "engine_version": ENGINE_VERSION,
         "run_id": f"us-run-{seed_hash[:16]}",
         "artifact_id": f"us-artifact-{seed_hash[:20]}",
         "workflow": request.workflow,
@@ -65,7 +73,7 @@ def build_research_packet(
         "snapshot_hash": snapshot.snapshot_hash,
         "data_mode": snapshot.data_mode,
         "pit_quality": snapshot.pit_quality,
-        "market_context": _canonicalize_market_context(snapshot.data["market_context"]),
+        "market_context": _timely_context(snapshot, request),
     }
     if request.subject is not None:
         packet["subject"] = request.subject
@@ -89,7 +97,7 @@ def build_research_packet(
             cutoff_excluded_fact_ids.update(decision.pop("_cutoff_excluded_fact_ids"))
 
         if theme_decisions or request.workflow != "stock_research":
-            theme_summaries.append(_theme_summary(theme, theme_decisions))
+            theme_summaries.append(_theme_summary(theme, theme_decisions, snapshot, request))
 
     decorate_quality(all_decisions, request.decision_at.isoformat())
     all_decisions.sort(
@@ -132,6 +140,7 @@ def build_research_packet(
         ]
     )
     packet["data_status"] = _data_status(snapshot, all_decisions)
+    packet["research_diagnostics"] = build_diagnostics(snapshot, all_decisions, request.decision_at)
 
     stable_packet = deepcopy(packet)
     stable_packet.pop("generated_at", None)
@@ -229,6 +238,8 @@ def _evaluate_candidate(
         "stage_not_fading": stage != "fading",
         "calculations_complete": calculations_complete,
         "issuer_specific_official": bool(issuer_specific_official),
+        "market_freshness": price_readiness(snapshot, candidate, request.decision_at)["status"]
+        in {"FIXTURE", "CURRENT_CORE_SESSION"},
     }
 
     candidate_data_gaps = list(candidate.get("data_gaps", []))
@@ -247,6 +258,7 @@ def _evaluate_candidate(
         or not gates["issuer_specific_official"]
         or not gates["calculations_complete"]
         or not gates["future_catalyst"]
+        or not gates["market_freshness"]
         or bool(candidate_data_gaps)
     ):
         decision = "continue_research"
@@ -276,9 +288,9 @@ def _evaluate_candidate(
         "decision": decision,
         "decision_label": DECISION_LABELS[decision],
         "thesis": candidate["thesis"],
-        "bull_case": _canonicalize_case(candidate["bull_case"]),
-        "bear_case": _canonicalize_case(candidate["bear_case"]),
-        "risk_verdict": _canonicalize_case(candidate["risk_verdict"]),
+        "bull_case": _timely_case(candidate["bull_case"], usable_evidence_refs),
+        "bear_case": _timely_case(candidate["bear_case"], usable_evidence_refs),
+        "risk_verdict": _timely_case(candidate["risk_verdict"], usable_evidence_refs),
         "transmission_chain": list(theme["transmission_chain"]),
         "next_catalyst_at": theme["next_catalyst_at"],
         "invalidation_conditions": invalidation_conditions,
@@ -334,6 +346,10 @@ def _build_reasons(
         reasons.append("Missing usable official primary evidence before decision_at.")
     if not gates["structured_market"]:
         reasons.append("Missing usable structured market evidence before decision_at.")
+    if not gates["market_freshness"]:
+        reasons.append(
+            "Current regular-session price is stale, missing, or not verified against a sourced US calendar."
+        )
     if not gates["transmission_chain"]:
         reasons.append("Transmission chain must contain at least three links.")
     if not gates["three_viewpoints"]:
@@ -364,6 +380,8 @@ def _build_reasons(
 def _theme_summary(
     theme: Mapping[str, Any],
     decisions: list[dict[str, Any]],
+    snapshot,
+    request,
 ) -> dict[str, Any]:
     candidate_counts = {
         "observe": sum(1 for item in decisions if item["decision"] == "observe"),
@@ -377,7 +395,21 @@ def _theme_summary(
         "theme_name": theme["name"],
         "event_type": theme["event_type"],
         "stage": theme["stage"],
-        "dimensions": _canonicalize_dimensions(theme["dimensions"]),
+        "dimensions": {
+            k: v
+            if v["evidence_refs"]
+            and all(
+                parse_datetime(snapshot.evidence_by_id[r]["available_at"], "available_at")
+                <= request.decision_at
+                for r in v["evidence_refs"]
+            )
+            else {
+                "assessment": "UNKNOWN",
+                "reason": "UNKNOWN: pre-cutoff evidence unavailable",
+                "evidence_refs": [],
+            }
+            for k, v in _canonicalize_dimensions(theme["dimensions"]).items()
+        },
         "transmission_chain": list(theme["transmission_chain"]),
         "next_catalyst_at": theme["next_catalyst_at"],
         "evidence_refs": _sorted_unique_strings(theme.get("evidence_refs", [])),
@@ -486,6 +518,32 @@ def _canonicalize_case(case: Mapping[str, Any]) -> dict[str, Any]:
         "text": case["text"],
         "evidence_refs": _sorted_unique_strings(case.get("evidence_refs", [])),
     }
+
+
+def _timely_case(case, usable_refs):
+    if not case.get("evidence_refs") or not set(case["evidence_refs"]).issubset(usable_refs):
+        return {
+            "text": "UNKNOWN: viewpoint lacks complete pre-cutoff evidence support.",
+            "evidence_refs": [],
+        }
+    return _canonicalize_case(case)
+
+
+def _timely_context(snapshot, request):
+    context = snapshot.data["market_context"]
+    refs = context.get("evidence_refs", [])
+    if not refs or any(
+        parse_datetime(snapshot.evidence_by_id[r]["available_at"], "available_at")
+        > request.decision_at
+        for r in refs
+    ):
+        return {
+            k: []
+            if k == "evidence_refs"
+            else "UNKNOWN: complete pre-cutoff context evidence unavailable."
+            for k in context
+        }
+    return _canonicalize_market_context(context)
 
 
 def _canonicalize_dimensions(dimensions: Mapping[str, Any]) -> dict[str, Any]:

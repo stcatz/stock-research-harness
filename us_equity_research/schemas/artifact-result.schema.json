@@ -19,29 +19,64 @@
     "relative_path"
   ],
   "properties": {
-    "schema_version": { "const": "0.1" },
-    "market": { "const": "US" },
+    "schema_version": {
+      "const": "0.1"
+    },
+    "market": {
+      "const": "US"
+    },
     "artifact_id": {
       "type": "string",
       "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9._-]{1,128}$",
       "maxLength": 128
     },
     "section": {
-      "enum": ["summary", "report", "manifest", "packet", "facts"]
+      "enum": [
+        "summary",
+        "report",
+        "manifest",
+        "packet",
+        "facts"
+      ]
     },
     "content_type": {
-      "enum": ["application/json", "text/markdown"]
+      "enum": [
+        "application/json",
+        "text/markdown"
+      ]
     },
-    "content": { "type": "string" },
-    "truncated": { "type": "boolean" },
-    "cursor": { "type": "integer", "minimum": 0 },
-    "next_cursor": { "type": ["integer", "null"], "minimum": 0 },
-    "total_chars": { "type": "integer", "minimum": 0 },
-    "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "content": {
+      "type": "string"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "cursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "next_cursor": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "total_chars": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "relative_path": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
+    },
+    "full_report_verified": {
+      "type": "boolean"
     }
   }
 }

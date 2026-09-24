@@ -119,3 +119,9 @@ This workflow is research only. It never grants execution authority.
 - Use only `exclude`, `continue_research`, or `observe`.
 - Never write buy/sell/target-price/order language.
 - End every report with: `本报告仅用于研究，不构成投资建议，所有事实与交易判断须由用户独立复核。`
+
+## US 计划卡验收（2026-09-12）
+
+报告顶部检查 research_diagnostics 四类能力覆盖，再阅读逐候选计划。exclude 对象只作为补证任务；observe 需要有效常规收盘资格。种子财报日未经原始公告确认，同行范围未经业务可比性验证，均不得改写成已验证事实。纽约/上海时间由时区转换；实际交易日由显式官方日历输入，不套用中国工作日。
+
+计划按“原始披露 → 冻结事前预期 → 同口径经营验证 → 可比同行与价格反馈”组织，支持/反对/未知分支分别保留。当前模板不构成持续监控或语义分析执行证明。输入、来源和模型能力边界见 [研究升级契约](docs/RESEARCH_UPGRADE.md)。

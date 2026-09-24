@@ -1,0 +1,20 @@
+{
+  "status": "partial_import",
+  "imported": {
+    "00_CODEX_TAKEOVER_PROMPT.md": "8c59e608fd8206e05cb5021b541ac28f2f7ffe244233d3654760f2a8d773e145"
+  },
+  "missing": [
+    "original README.md",
+    "01_REPORT_CONTRACT.md",
+    "02_LESSONS_AND_TESTS.md",
+    "03_ACCEPTANCE_AND_CUTOVER.md",
+    "original handoff_manifest.json"
+  ],
+  "local_derived_assets": [
+    "CONTRACT.md",
+    "LESSONS.json",
+    "DAILY.md",
+    "AUDIT.md"
+  ],
+  "historical_claims": "UNVERIFIED"
+}

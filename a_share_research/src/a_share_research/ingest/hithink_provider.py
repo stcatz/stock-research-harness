@@ -32,7 +32,7 @@ _PCT_TOLERANCE = Decimal("0.0001")
 # to coarser units at large scales). Tolerate only this sub-unit / sub-ppm quantization
 # noise without relaxing genuine session mismatches, which differ by far more.
 _PRICE_TOLERANCE = Decimal("0.001")
-_AMOUNT_ABS_TOLERANCE = Decimal("1")
+_AMOUNT_ABS_TOLERANCE = Decimal(1)
 _AMOUNT_REL_TOLERANCE = Decimal("0.000001")
 _FIELD_TOLERANCES = {
     "open": _PRICE_TOLERANCE,
@@ -100,6 +100,29 @@ class HiThinkProvider:
         history_response = self._get(history_endpoint, history_params)
         history_data = _response_data(history_response, history_endpoint)
         bars, upstream_timestamp = _parse_history(code, history_data)
+
+        history_retrieved = _response_retrieved_at(history_response, history_endpoint)
+        if bars[-1].trade_date != history_retrieved.date():
+            # An undated live quote cannot supply a reference price for a different session.
+            return DailySeries(
+                code=code, bars=bars,
+                session_statuses={bar.trade_date: UNKNOWN for bar in bars},
+                retrieved_at=history_retrieved,
+                metadata={
+                    "adapter": "hithink-financial-api",
+                    "history_endpoint": history_endpoint,
+                    "upstream_history_timestamp_ms": upstream_timestamp,
+                    "snapshot_cross_check": {
+                        "status": "NOT_COMPARABLE",
+                        "history_session": bars[-1].trade_date.isoformat(),
+                        "retrieval_date": history_retrieved.date().isoformat(),
+                        "note": "Undated current quote not requested for a historical session; "
+                                "reference preclose and daily change remain UNKNOWN.",
+                    },
+                    "raw_artifacts": [_response_artifact(history_response, history_endpoint)],
+                },
+                adjustment="none",
+            )
 
         snapshot_params = {"thscodes": thscode}
         snapshot_response = self._get(snapshot_endpoint, snapshot_params)
@@ -313,8 +336,9 @@ def _cross_check_latest_snapshot(
         "status": "MATCHED",
         "matched_fields": sorted(expected),
         "note": (
-            "Explicit snapshot values match the latest historical bar. The snapshot carries no "
-            "session date, so this is a value cross-check rather than independent date evidence."
+            "Explicit snapshot values match the latest historical bar at their reported price "
+            "precision and bounded turnover rounding. The snapshot carries no session date, so "
+            "this is a value cross-check rather than independent date evidence."
         ),
     }
 

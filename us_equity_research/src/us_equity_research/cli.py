@@ -9,10 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from .core.contracts import MARKET, SCHEMA_VERSION, ContractError
+from .core.daily_review import verify_review, write_review
 from .core.drift import audit_snapshot_drift
 from .core.outcomes import record_outcome, summarize_outcome_history, summarize_outcomes
 from .core.pipeline import doctor, read_artifact, run_research
 from .core.storage import initialize_workspace
+from .ingest.futu_mcp import FutuMCPTransport
+from .ingest.futu_quotes import FutuMCPQuoteClient, observation_report, write_new_bundle
+from .ingest.futu_quotes import collect as collect_futu
 from .ingest.sec import collect_sec_snapshot
 
 
@@ -41,6 +45,65 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional BYOK licensed structured-market JSON path",
     )
 
+    futu_parser = subparsers.add_parser(
+        "collect-futu-quotes", help="Collect US daily quote staging data using quote-only REST"
+    )
+    futu_parser.add_argument("--plan-json", required=True)
+    futu_parser.add_argument("--output", required=True)
+    futu_parser.add_argument("--transport", choices=["rest", "mcp"], default="rest")
+
+    review_parser = subparsers.add_parser(
+        "daily-review", help="Write an immutable daily review with explicit capability gaps"
+    )
+    review_parser.add_argument("--bundle-json", required=True)
+    review_parser.add_argument("--calendar-json", required=True)
+    review_parser.add_argument("--sec-snapshot-json")
+    review_parser.add_argument("--fundamentals-json")
+    review_parser.add_argument("--decision-at", required=True)
+    review_parser.add_argument("--output-dir", required=True)
+    verify_parser = subparsers.add_parser(
+        "verify-daily-review", help="Verify hashes and recompute daily review from frozen inputs"
+    )
+    verify_parser.add_argument("--output-dir", required=True)
+    calendar_parser = subparsers.add_parser(
+        "refresh-us-calendar", help="Fetch official core calendar without guessing holidays"
+    )
+    calendar_parser.add_argument("--start", required=True)
+    calendar_parser.add_argument("--end", required=True)
+    calendar_parser.add_argument("--output", required=True)
+    fundamental_parser = subparsers.add_parser(
+        "collect-fundamentals", help="Collect SEC inputs with TTM lineage"
+    )
+    fundamental_parser.add_argument("--seed-json", required=True)
+    fundamental_parser.add_argument("--output", required=True)
+    ledger_parser = subparsers.add_parser(
+        "ledger-add", help="Append a first-observed research record"
+    )
+    ledger_parser.add_argument("--record-json", required=True)
+    ledger_parser.add_argument("--directory", required=True)
+    expectation_parser = subparsers.add_parser(
+        "ledger-expectation", help="Read only an expectation actually observed by the cutoff"
+    )
+    for option in (
+        "directory",
+        "symbol",
+        "metric",
+        "period-end",
+        "decision-at",
+        "period-type",
+        "accounting-basis",
+    ):
+        expectation_parser.add_argument("--" + option, required=True)
+
+    observe_parser = subparsers.add_parser(
+        "futu-observation-report",
+        help="Render staged US daily observations using an explicitly reviewed calendar",
+    )
+    observe_parser.add_argument("--bundle-json", required=True)
+    observe_parser.add_argument("--calendar-json", required=True)
+    observe_parser.add_argument("--decision-at", required=True)
+    observe_parser.add_argument("--output", required=True)
+
     run_parser = subparsers.add_parser("run", help="Run a versioned JSON research request")
     run_parser.add_argument(
         "--request-json",
@@ -53,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--request-json",
         required=True,
         help="JSON file path or '-' to read exactly one JSON object from stdin",
+    )
+
+    read_parser.add_argument(
+        "--complete",
+        action="store_true",
+        help="Verify and concatenate every artifact page",
     )
 
     for command, help_text in (
@@ -103,10 +172,94 @@ def main(argv: Sequence[str] | None = None) -> int:
                 snapshot_id=args.snapshot_id,
                 market_path=Path(args.market_json) if args.market_json else None,
             )
+        elif args.command == "collect-futu-quotes":
+            client = FutuMCPQuoteClient(FutuMCPTransport()) if args.transport == "mcp" else None
+            result_bundle = collect_futu(_read_json(args.plan_json), client)
+            write_new_bundle(result_bundle, args.output)
+            result = {
+                "market": "US",
+                "status": result_bundle["status"],
+                "symbols": len(result_bundle["securities"]),
+                "retrieved_at": result_bundle["retrieved_at"],
+            }
+        elif args.command == "refresh-us-calendar":
+            from datetime import UTC, datetime
+
+            from .ingest.exchange_calendar import build_calendar, fetch_schedule
+
+            schedule = fetch_schedule(int(args.start[:4]))
+            bundle = build_calendar(schedule, args.start, args.end, datetime.now(UTC).isoformat())
+            write_new_bundle(bundle, args.output)
+            result = {
+                "status": "REFRESHED",
+                "sessions": len(bundle["session_calendar"]["sessions"]),
+            }
+        elif args.command == "collect-fundamentals":
+            from .ingest.fundamentals import collect_fundamentals
+            from .ingest.sec import SecClient
+
+            bundle = collect_fundamentals(
+                _read_json(args.seed_json),
+                SecClient(user_agent=os.environ.get("SEC_USER_AGENT", "")),
+            )
+            write_new_bundle(bundle, args.output)
+            result = {"status": "COLLECTED", "companies": len(bundle["companies"])}
+        elif args.command == "ledger-add":
+            from .core.research_ledger import append_record
+
+            result = append_record(args.directory, _read_json(args.record_json))
+        elif args.command == "ledger-expectation":
+            from .core.research_ledger import select_expectation
+
+            record = select_expectation(
+                args.directory,
+                args.symbol,
+                args.metric,
+                args.period_end,
+                args.decision_at,
+                period_type=args.period_type,
+                accounting_basis=args.accounting_basis,
+            )
+            result = {"status": "FOUND" if record else "UNKNOWN", "record": record}
+        elif args.command == "daily-review":
+            result = write_review(
+                _read_json(args.bundle_json),
+                _read_json(args.calendar_json),
+                _read_json(args.sec_snapshot_json) if args.sec_snapshot_json else None,
+                args.decision_at,
+                args.output_dir,
+                _read_json(args.fundamentals_json) if args.fundamentals_json else None,
+            )
+        elif args.command == "verify-daily-review":
+            result = verify_review(args.output_dir)
+        elif args.command == "futu-observation-report":
+            report = observation_report(
+                _read_json(args.bundle_json), _read_json(args.calendar_json), args.decision_at
+            )
+            with Path(args.output).open("x", encoding="utf-8") as handle:
+                handle.write(report)
+            result = {
+                "market": "US",
+                "status": "STAGED_OBSERVATIONS_ONLY",
+                "characters": len(report),
+            }
         elif args.command == "run":
             result = run_research(_read_json(args.request_json), workspace)
         elif args.command == "artifact-read":
-            result = read_artifact(_read_json(args.request_json), workspace)
+            request = _read_json(args.request_json)
+            if args.complete and request.get("cursor", 0) != 0:
+                raise ContractError("--complete requires cursor 0")
+            result = read_artifact(request, workspace)
+            if args.complete:
+                parts = [result["content"]]
+                page = result
+                while page["next_cursor"] is not None:
+                    page = read_artifact({**request, "cursor": page["next_cursor"]}, workspace)
+                    parts.append(page["content"])
+                result.update(content="".join(parts), truncated=False, next_cursor=None)
+                if len(result["content"]) != result["total_chars"]:
+                    raise ContractError("complete artifact length mismatch")
+                result["full_report_verified"] = True
         elif args.command == "outcome-record":
             result = record_outcome(_read_json(args.request_json), workspace)
         elif args.command == "outcome-summary":

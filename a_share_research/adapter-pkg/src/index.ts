@@ -64,6 +64,7 @@ type RunSuccessResult = {
   writer_mode: string
   method_id: string
   data_mode: string
+  data_readiness?: string
   pit_quality: string
   workflow: ResearchWorkflow
   decision_at: string
@@ -715,6 +716,7 @@ export function sanitizeResearchRunResult(raw: unknown): ResearchRunResult {
     writer_mode: writerMode,
     method_id: methodId,
     data_mode: dataMode,
+    data_readiness: getString(payload.data_readiness, 'data_readiness'),
     pit_quality: pitQuality,
     workflow,
     decision_at: decisionAt,
@@ -782,6 +784,7 @@ function renderResearchRun(value: ResearchRunResult): string {
     `decision_at: ${value.decision_at}`,
     `snapshot_id: ${value.snapshot_id}`,
     `data_mode: ${value.data_mode}`,
+    `data_readiness: ${value.data_readiness ?? 'UNKNOWN'}`,
     `pit_quality: ${value.pit_quality}`,
   ]
   if (value.counts) {
@@ -964,7 +967,7 @@ function registerResearchTool(ctx: Context) {
 function registerArtifactTool(ctx: Context) {
   return ctx.tools.register(defineTool({
     name: 'cn_artifact_read',
-    description: 'Read one lossless page of a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required and every non-null next_cursor must be followed while content_sha256 remains stable; summary is only a bounded preview and must never be presented as the full report.',
+    description: 'Read one lossless page of a canonical CN research artifact section by artifact_id. When the user asks for a full or complete research report, section=report is required and every non-null next_cursor must be followed while content_sha256 remains stable; summary is only a bounded preview and must never be presented as the full report. Preserve page whitespace and concatenate pages in order. In v2 artifacts, distinguish current-market observations from dated cumulative feedback and expired research windows. Use market_diagnostics.interpretation_contract in section=packet when interpreting evidence. Quote coverage, source IDs and time semantics; do not infer a sentiment transition from one cross-section or business confirmation from a price move. The deterministic engine has not executed independent semantic analysis. In v3 reports, show the observation_plan cards before the evidence appendix: named comparison members, checkpoints, support/counter conditions and research follow-up actions. These are pending manual observations, not scheduled monitoring or completed outcomes; preserve catalyst and evidence gates.',
     parameters: {
       artifact_id: {
         type: 'string',

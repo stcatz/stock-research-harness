@@ -3,10 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .contracts import DISCLAIMER, ContractError, parse_datetime, validate_url
 from .utils import write_json_atomic
