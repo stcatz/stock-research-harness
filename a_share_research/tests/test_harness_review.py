@@ -168,6 +168,43 @@ class HarnessReviewTests(unittest.TestCase):
             payload,
         )
 
+    def test_bear_parser_tolerates_braces_in_the_surrounding_prose(self) -> None:
+        # Regression guard for the machine-local harness fix that located the review payload
+        # with "first { .. last }". That span breaks as soon as the narration itself contains
+        # a brace, and the whole run then exits 3. Scanning for the single object that actually
+        # satisfies the contract is what makes both cases work.
+        payload = {
+            "artifact_id": ARTIFACT_ID,
+            "decision_at": DECISION_AT,
+            "review_mode": "independent_bear",
+            "integrity": {"content_sha256": "a" * 64, "total_chars": 10, "pages_read": 1},
+            "candidates": [
+                {
+                    "candidate_id": "theme-test:CN.SH.600000",
+                    "symbol": "600000",
+                    "contradicting_evidence": [],
+                    "alternative_explanations": [],
+                    "invalidation_tests": [],
+                    "unknowns": ["UNKNOWN"],
+                    "bear_confidence": 0.4,
+                }
+            ],
+            "global_data_risks": [],
+        }
+        raw = "检查完成 {草稿}，正式结果如下：\n" + json.dumps(payload, ensure_ascii=False) + "\n{待复核}"
+        self.assertEqual(
+            normalize_bear_review(
+                raw,
+                artifact_id=ARTIFACT_ID,
+                decision_at=DECISION_AT,
+                canonical_candidates={
+                    "theme-test:CN.SH.600000": ("600000", "continue_research")
+                },
+                expected_integrity=EXPECTED_INTEGRITY,
+            ),
+            payload,
+        )
+
     def test_final_contract_renders_decision_first_memo(self) -> None:
         payload = _final_payload()
         normalized = normalize_final_judgment(
